@@ -1,13 +1,20 @@
 import os
 import json
 import html
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import requests
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "@gametraverse")
 DB_FILE = "sent_games.json"
-HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0"}
+HEADERS = {"User-Agent": "FreeGamePulseBot/2.0"}
+TZ = timezone(timedelta(hours=5))  # Toshkent vaqti (UTC+5)
+
+STORES = {
+    "1": "Steam",
+    "7": "GOG",
+    "25": "Epic Games Store"
+}
 
 def load_sent():
     if os.path.exists(DB_FILE):
@@ -20,105 +27,97 @@ def load_sent():
 
 def save_sent(ids):
     with open(DB_FILE, "w", encoding="utf-8") as f:
-        json.dump(ids, f, indent=2)
+        json.dump(ids[-300:], f, indent=2)
 
-def fetch_epic():
-    url = "https://epicgames.com"
-    games = []
+def get_rates():
+    # O'zbekiston Markaziy bankidan jonli USD va RUB kurslarini olish
+    usd_uzs = 12800.0
+    rub_uzs = 135.0
     try:
-        r = requests.get(url, headers=HEADERS, timeout=25)
-        data = r.json()
-        elements = data["data"]["Catalog"]["searchStore"]["elements"]
-        now = datetime.now(timezone.utc)
+        r = requests.get("https://cbu.uz", timeout=15)
+        if r.status_code == 200:
+            for item in r.json():
+                if item.get("Ccy") == "USD":
+                    usd_uzs = float(item["Rate"])
+                elif item.get("Ccy") == "RUB":
+                    rub_uzs = float(item["Rate"])
+    except Exception as e:
+        print("Valyuta kursi xatosi (standart kurs ishlatiladi):", e)
+    return usd_uzs, rub_uzs
 
-        for el in elements:
-            promos = el.get("promotions") or {}
-            active = False
-            end_str = "Cheklangan muddat"
-            for block in promos.get("promotionalOffers") or []:
-                for offer in block.get("promotionalOffers") or []:
-                    s = datetime.fromisoformat(offer["startDate"].replace("Z", "+00:00"))
-                    e = datetime.fromisoformat(offer["endDate"].replace("Z", "+00:00"))
-                    if s <= now <= e:
-                        active = True
-                        end_str = e.strftime("%d.%m.%Y %H:%M UTC")
-            if not active:
-                continue
+def format_prices(usd_price, usd_uzs, rub_uzs):
+    if usd_price <= 0:
+        return "<b>0$ / 0 so'm / 0 ₽ (100% BEPUL)</b>"
+    uzs = int(round((usd_price * usd_uzs) / 100) * 100)
+    rub = int(round((usd_price * usd_uzs) / rub_uzs))
+    uzs_str = f"{uzs:,}".replace(",", " ")
+    rub_str = f"{rub:,}".replace(",", " ")
+    return f"<b>${usd_price:.2f}</b> | <b>{uzs_str} so'm</b> | <b>{rub_str} ₽</b>"
 
-            price = (el.get("price") or {}).get("totalPrice") or {}
-            orig = price.get("originalPrice") or 0
-            if price.get("discountPrice") != 0 or orig <= 0:
-                continue
+def fetch_deals():
+    # Steam (1), GOG (7), Epic Games (25) — kamida 75% chegirmali o'yinlar
+    url = "https://cheapshark.com"
+    deals = []
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=20)
+        if r.status_code != 200:
+            print("CheapShark status:", r.status_code)
+            return []
+        for d in r.json():
+            deal_id = d.get("dealID")
+            title = d.get("title", "Unknown")
+            store_id = str(d.get("storeID", ""))
+            store_name = STORES.get(store_id, "PC Store")
+            sale_price = float(d.get("salePrice", 0))
+            normal_price = float(d.get("normalPrice", 0))
+            savings = int(round(float(d.get("savings", 0))))
+            thumb = d.get("thumb", "")
+            steam_id = d.get("steamAppID")
 
-            slug = el.get("productSlug") or ""
-            if not slug:
-                for m in (el.get("catalogNs") or {}).get("mappings") or []:
-                    if m.get("pageSlug"):
-                        slug = m["pageSlug"]
-                        break
-            if not slug:
-                slug = el.get("urlSlug") or ""
-            slug = slug.split("/")[0]
-            link = f"https://epicgames.com{slug}" if slug else "https://epicgames.com"
+            # Yuqori sifatli rasm olish (Steam bo'lsa katta banner, aks holda thumb)
+            image = f"https://steamstatic.com{steam_id}/header.jpg" if steam_id else thumb
+            link = f"https://cheapshark.com{deal_id}"
 
-            image = ""
-            for img in el.get("keyImages") or []:
-                if img.get("type") in ("OfferImageWide", "DieselStoreFrontWide", "Thumbnail"):
-                    image = img.get("url", "")
-                    break
-
-            games.append({
-                "id": f"epic_{el['id']}",
-                "title": el.get("title", "Unknown"),
-                "store": "Epic Games Store",
-                "worth": f"${orig / 100:.2f}",
-                "end": end_str,
+            deals.append({
+                "id": f"deal_{deal_id}",
+                "title": title,
+                "store": store_name,
+                "sale": sale_price,
+                "normal": normal_price,
+                "savings": savings,
                 "image": image,
                 "link": link
             })
     except Exception as e:
-        print("Epic API xatosi:", e)
-    return games
+        print("Deals API xatosi:", e)
+    return deals
 
-def fetch_steam():
-    url = "https://steampowered.com"
-    games = []
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=25)
-        data = r.json()
-        items = (data.get("specials") or {}).get("items") or []
-        for it in items:
-            if it.get("discount_percent") == 100 and it.get("final_price") == 0 and (it.get("original_price") or 0) > 0:
-                appid = it["id"]
-                games.append({
-                    "id": f"steam_{appid}",
-                    "title": it.get("name", "Unknown"),
-                    "store": "Steam",
-                    "worth": f"${it['original_price'] / 100:.2f}",
-                    "end": "Cheklangan muddat",
-                    "image": it.get("large_capsule_image") or it.get("header_image", ""),
-                    "link": f"https://steampowered.com{appid}"
-                })
-    except Exception as e:
-        print("Steam API xatosi:", e)
-    return games
+def send_post(deal, usd_uzs, rub_uzs):
+    is_free = deal["sale"] == 0
+    header = "🎁 <b>100% BEPUL O'YIN!</b>" if is_free else f"🔥 <b>KATTA CHEGIRMA (-{deal['savings']}%)!</b>"
+    btn_text = "📥 Bepul olish" if is_free else "🛒 Chegirmada olish"
 
-def send_post(game):
+    old_price_str = format_prices(deal["normal"], usd_uzs, rub_uzs).replace("<b>", "").replace("</b>", "")
+    new_price_str = format_prices(deal["sale"], usd_uzs, rub_uzs)
+
     caption = (
-        f"🎁 <b>BEPUL O'YIN!</b>\n\n"
-        f"🎮 <b>{html.escape(game['title'])}</b>\n"
-        f"🏪 <b>Do'kon:</b> {game['store']}\n"
-        f"💰 <b>Narxi:</b> <s>{game['worth']}</s> ➡️ <b>0$ (BEPUL)</b>\n"
-        f"⏳ <b>Muddat:</b> {game['end']}"
+        f"{header}\n\n"
+        f"🎮 <b>{html.escape(deal['title'])}</b>\n"
+        f"🏪 <b>Do'kon:</b> {deal['store']}\n"
+        f"📉 <b>Chegirma:</b> -{deal['savings']}%\n\n"
+        f"❌ <b>Eski narxi:</b> <s>{old_price_str}</s>\n"
+        f"✅ <b>Yangi narxi:</b> {new_price_str}\n\n"
+        f"⏳ <b>Muddat:</b> Aksiya tugaguncha (cheklangan vaqt)"
     )
-    markup = {"inline_keyboard": [[{"text": "📥 Bepul olish", "url": game["link"]}]]}
 
-    if game["image"]:
+    markup = {"inline_keyboard": [[{"text": btn_text, "url": deal["link"]}]]}
+
+    if deal["image"]:
         res = requests.post(
             f"https://telegram.org{BOT_TOKEN}/sendPhoto",
             data={
                 "chat_id": CHANNEL_ID,
-                "photo": game["image"],
+                "photo": deal["image"],
                 "caption": caption,
                 "parse_mode": "HTML",
                 "reply_markup": json.dumps(markup)
@@ -126,9 +125,8 @@ def send_post(game):
             timeout=20
         )
         if res.status_code == 200:
-            print("Yuborildi:", game["title"])
+            print("Yuborildi:", deal["title"])
             return True
-        print("sendPhoto xato:", res.text)
 
     res = requests.post(
         f"https://telegram.org{BOT_TOKEN}/sendMessage",
@@ -140,24 +138,32 @@ def send_post(game):
         },
         timeout=20
     )
-    print("sendMessage:", game["title"], res.status_code, res.text)
+    print("Matn yuborildi:", deal["title"], res.status_code)
     return res.status_code == 200
 
 def main():
     if not BOT_TOKEN:
-        print("XATO: BOT_TOKEN kiritilmagan!")
+        print("XATO: BOT_TOKEN topilmadi!")
         return
 
     sent_ids = load_sent()
-    games = fetch_epic() + fetch_steam()
-    print(f"Topilgan bepul o'yinlar soni: {len(games)}")
+    usd_uzs, rub_uzs = get_rates()
+    print(f"Kurs: 1 USD = {usd_uzs} UZS | 1 RUB = {rub_uzs} UZS")
+
+    deals = fetch_deals()
+    print(f"Topilgan chegirmalar soni: {len(deals)}")
     updated = False
 
-    for game in games:
-        if game["id"] not in sent_ids:
-            if send_post(game):
-                sent_ids.append(game["id"])
+    # Birinchi ishga tushganda kanal to'lib ketmasligi uchun eng sara 5 tasini yuboramiz
+    count = 0
+    for deal in deals:
+        if deal["id"] not in sent_ids:
+            if send_post(deal, usd_uzs, rub_uzs):
+                sent_ids.append(deal["id"])
                 updated = True
+                count += 1
+                if count >= 5:
+                    break
 
     if updated:
         save_sent(sent_ids)
