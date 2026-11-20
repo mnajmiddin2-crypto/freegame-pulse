@@ -1,108 +1,84 @@
 import os
 import json
-import html
 import requests
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-CHANNEL = os.environ.get("CHANNEL", "@gametraverse")
-SENT_FILE = "sent_games.json"
+CHANNEL_ID = os.environ.get("CHANNEL_ID", "@gametraverse")
+DB_FILE = "sent_games.json"
 
 def load_sent():
-    if os.path.exists(SENT_FILE):
-        with open(SENT_FILE, "r", encoding="utf-8") as f:
+    if os.path.exists(DB_FILE):
+        with open(DB_FILE, "r", encoding="utf-8") as f:
             try:
                 return json.load(f)
             except Exception:
                 return []
     return []
 
-def save_sent(data):
-    with open(SENT_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+def save_sent(ids):
+    with open(DB_FILE, "w", encoding="utf-8") as f:
+        json.dump(ids, f, indent=2)
 
-def get_epic_games():
-    url = "https://epicgames.com"
-    r = requests.get(url, params={"locale": "en-US", "country": "US", "allowCountries": "US"}, timeout=20)
-    r.raise_for_status()
-    elements = r.json()["data"]["Catalog"]["searchStore"]["elements"]
-    
-    games = []
-    for el in elements:
-        price = (el.get("price") or {}).get("totalPrice") or {}
-        if price.get("discountPrice") == 0 and (price.get("originalPrice") or 0) > 0:
-            promos = el.get("promotions") or {}
-            if promos.get("promotionalOffers"):
-                slug = el.get("productSlug") or el.get("urlSlug") or ""
-                slug = slug.split("/")
-                link = f"https://epicgames.com{slug}" if slug else "https://epicgames.com"
-                
-                image = ""
-                for img in el.get("keyImages") or []:
-                    if img.get("type") in ("OfferImageWide", "DieselStoreFrontWide", "Thumbnail"):
-                        image = img.get("url")
-                        break
-                        
-                games.append({
-                    "id": f"epic_{el['id']}",
-                    "title": el.get("title", "O'yin"),
-                    "store": "Epic Games Store",
-                    "price": f"${price['originalPrice'] / 100:.2f}",
-                    "link": link,
-                    "image": image
-                })
-    return games
+def get_free_games():
+    url = "https://gamerpower.com"
+    r = requests.get(url, timeout=20)
+    if r.status_code == 200:
+        return r.json()
+    return []
 
 def send_post(game):
+    title = game.get("title", "Noma'lum o'yin")
+    worth = game.get("worth", "N/A")
+    platforms = game.get("platforms", "")
+    end_date = game.get("end_date", "Noma'lum")
+    image = game.get("image", "")
+    link = game.get("open_giveaway_url", "")
+
     caption = (
         f"🎁 <b>BEPUL O'YIN!</b>\n\n"
-        f"🎮 <b>{html.escape(game['title'])}</b>\n"
-        f"🏪 Do'kon: {game['store']}\n"
-        f"💰 Narxi: <s>{game['price']}</s> ➡️ <b>BEPUL (0$)</b>"
+        f"🎮 <b>{title}</b>\n"
+        f"🖥 <b>Platforma:</b> {platforms}\n"
+        f"💰 <b>Narxi:</b> <s>{worth}</s> ➡️ <b>0$ (BEPUL)</b>\n"
+        f"⏳ <b>Tugash vaqti:</b> {end_date}"
     )
-    markup = json.dumps({
-        "inline_keyboard": [[{"text": "🎮 Bepul olish", "url": game["link"]}]]
-    })
-    
+
+    markup = {
+        "inline_keyboard": [[
+            {"text": "📥 Bepul olish", "url": link}
+        ]]
+    }
+
     url = f"https://telegram.org{BOT_TOKEN}/sendPhoto"
-    res = requests.post(url, data={
-        "chat_id": CHANNEL,
-        "photo": game["image"],
+    payload = {
+        "chat_id": CHANNEL_ID,
+        "photo": image,
         "caption": caption,
         "parse_mode": "HTML",
-        "reply_markup": markup
-    }, timeout=20).json()
-    
-    if not res.get("ok"):
-        print("Rasm bilan yuborishda xato:", res)
-        url_msg = f"https://telegram.org{BOT_TOKEN}/sendMessage"
-        res = requests.post(url_msg, data={
-            "chat_id": CHANNEL,
-            "text": caption,
-            "parse_mode": "HTML",
-            "reply_markup": markup
-        }, timeout=20).json()
-        print("Matn bilan yuborish natijasi:", res)
-        
-    return res.get("ok", False)
+        "reply_markup": json.dumps(markup)
+    }
+
+    res = requests.post(url, data=payload, timeout=20)
+    print(title, "->", res.status_code, res.text)
+    return res.status_code == 200
 
 def main():
     if not BOT_TOKEN:
-        raise ValueError("XATO: GitHub Secrets ichida BOT_TOKEN topilmadi!")
-        
-    sent = load_sent()
-    games = get_epic_games()
-    print(f"Topilgan bepul o'yinlar soni: {len(games)}")
-    
-    for g in games:
-        if g["id"] not in sent:
-            print(f"Yuborilmoqda: {g['title']}")
-            if send_post(g):
-                sent.append(g["id"])
-                print("Muvaffaqiyatli yuborildi!")
-            else:
-                print("Yuborib bo'lmadi!")
-                
-    save_sent(sent)
+        print("XATO: BOT_TOKEN topilmadi!")
+        return
+
+    sent_ids = load_sent()
+    games = get_free_games()
+    updated = False
+
+    for game in reversed(games):
+        gid = str(game.get("id"))
+        if gid not in sent_ids:
+            if send_post(game):
+                sent_ids.append(gid)
+                updated = True
+
+    if updated:
+        save_sent(sent_ids)
 
 if __name__ == "__main__":
     main()
