@@ -2,33 +2,36 @@ import os
 import re
 import json
 import html
+import xml.etree.ElementTree as ET
 import requests
 
 RAW_TOKEN = (os.environ.get("BOT_TOKEN") or "").strip()
 m = re.search(r"(\d+:[A-Za-z0-9_-]{20,})", RAW_TOKEN)
 BOT_TOKEN = m.group(1) if m else RAW_TOKEN
 
-# URL ni qismlarga bo'lib yig'amiz (brauzer kengaytmalari buzib qo'ymasligi uchun)
 HOST = "api." + "telegram.org"
 TG_URL = f"https://{HOST}/bot{BOT_TOKEN}"
 CHANNEL_ID = "@gametraverse"
 DB_FILE = "sent_games.json"
+STATE_FILE = "bot_state.json"
 
-def load_sent():
-    if os.path.exists(DB_FILE):
-        with open(DB_FILE, "r", encoding="utf-8") as f:
+def load_json(path, default):
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
             try:
                 return json.load(f)
             except Exception:
-                return []
-    return []
+                return default
+    return default
 
-def save_sent(ids):
-    with open(DB_FILE, "w", encoding="utf-8") as f:
-        json.dump(ids[-300:], f, indent=2)
+def save_json(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
-def send_tg(chat_id, text, photo=None, url=None):
-    markup = json.dumps({"inline_keyboard": [[{"text": "📥 O'yinni ko'rish", "url": url}]]}) if url else None
+def send_tg(chat_id, text, photo=None, url=None, reply_markup=None):
+    markup = reply_markup or (
+        json.dumps({"inline_keyboard": [[{"text": "📥 O'yinni ko'rish", "url": url}]]}) if url else None
+    )
     if photo:
         data = {"chat_id": chat_id, "photo": photo, "caption": text, "parse_mode": "HTML"}
         if markup:
@@ -44,8 +47,39 @@ def send_tg(chat_id, text, photo=None, url=None):
     if markup:
         data["reply_markup"] = markup
     r = requests.post(f"{TG_URL}/sendMessage", data=data, timeout=20)
-    print("Telegram javob:", r.status_code, r.text)
     return r.status_code == 200
+
+# 1. Botga shaxsiy chatda yozgan foydalanuvchilarga javob berish (/start, /stop)
+def handle_bot_users(state):
+    offset = state.get("offset", 0)
+    users = state.setdefault("users", [])
+    try:
+        r = requests.get(f"{TG_URL}/getUpdates", params={"offset": offset, "timeout": 5}, timeout=15).json()
+        for upd in r.get("result", []):
+            state["offset"] = upd["update_id"] + 1
+            msg = upd.get("message") or {}
+            cid = msg.get("chat", {}).get("id")
+            text = (msg.get("text") or "").strip()
+            if not cid:
+                continue
+            if text == "/stop":
+                if cid in users:
+                    users.remove(cid)
+                send_tg(cid, "🔕 Bildirishnomalar to'xtatildi. Qayta yoqish uchun /start bosing.")
+            else:
+                if cid not in users:
+                    users.append(cid)
+                kb = json.dumps({"inline_keyboard": [[{"text": "📢 Kanalga o'tish (@gametraverse)", "url": "https://t.me"}]]})
+                send_tg(
+                    cid,
+                    "👋 <b>Salom! FreeGame Pulse botiga xush kelibsiz!</b>\n\n"
+                    "✅ Siz bildirishnomalarga obuna bo'ldingiz.\n"
+                    "🎮 Steam, Epic Games va GOG'dagi <b>100% bepul o'yinlar</b> hamda <b>katta chegirmalar</b> (Dollar, So'm va Rublda) har safar yangilanganda sizga ham, @gametraverse kanaliga ham yuboriladi!\n\n"
+                    "Bekor qilish: /stop",
+                    reply_markup=kb
+                )
+    except Exception as e:
+        print("Bot updates xato:", e)
 
 def get_rates():
     try:
@@ -56,80 +90,119 @@ def get_rates():
     except Exception:
         return 12800.0, 135.0
 
+# 2. GitHub serverlaridan bloklanmaydigan ochiq o'yin chegirmalari feedi (Steam + Epic + GOG)
 def fetch_deals():
     deals = []
-    # GitHub serverlaridan 100% ochiq ishlaydigan CheapShark mirror / Steam API
-    try:
-        # Steam wishlist / featured deals JSON (hech qanday proksisiz ishlaydigan endpoint)
-        r = requests.get("https://steampowered.com", timeout=15)
-        # Asosiy manba: CheapShark deals (to'g'ridan-to'g'ri maxsus User-Agent bilan)
-        cs_headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36", "Accept": "application/json"}
-        r2 = requests.get("https://cheapshark.com", headers=cs_headers, timeout=20)
-        print("CheapShark status:", r2.status_code)
-        if r2.status_code == 200 and r2.text.strip().startswith("["):
-            stores = {"1": "Steam", "7": "GOG", "25": "Epic Games Store"}
-            for d in r2.json():
-                steam_id = d.get("steamAppID")
+    headers = {"User-Agent": "python:freegame-pulse:v4.0 (by /u/gametraverse)"}
+    feeds = [
+        "https://reddit.com",
+        "https://reddit.com"
+    ]
+    ns = {"atom": "http://w3.org"}
+
+    for feed_url in feeds:
+        try:
+            r = requests.get(feed_url, headers=headers, timeout=20)
+            if r.status_code != 200:
+                continue
+            root = ET.fromstring(r.text)
+            for entry in root.findall("atom:entry", ns):
+                eid = entry.findtext("atom:id", default="", namespaces=ns)
+                title = entry.findtext("atom:title", default="", namespaces=ns)
+                content = entry.findtext("atom:content", default="", namespaces=ns)
+
+                if "expired" in title.lower():
+                    continue
+
+                store_m = re.search(r"\[(.*?)\]", title)
+                store = store_m.group(1) if store_m else "PC Store"
+                if not any(s in store.lower() for s in ("steam", "epic", "gog", "humble", "ubisoft")):
+                    continue
+
+                is_free = bool(re.search(r"\b(free|100%\s*off|\$0\.00|\$0)\b", title, re.I))
+                price_m = re.search(r"\$(\d+(?:\.\d{1,2})?)", title)
+                disc_m = re.search(r"(\d{2,3})%\s*off", title, re.I)
+
+                sale = 0.0 if is_free else (float(price_m.group(1)) if price_m else None)
+                disc = 100 if is_free else (int(disc_m.group(1)) if disc_m else None)
+
+                if not is_free and (sale is None or (disc is not None and disc < 50)):
+                    continue
+
+                link_m = re.search(r'href="(https?://[^"]+)"[^>]*>\[link\]', content)
+                link = html.unescape(link_m.group(1)) if link_m else ""
+                if not link:
+                    continue
+
+                # Steam AppID bo'lsa sifatli katta banner rasm yasaymiz
+                steam_m = re.search(r"store\.steampowered\.com/app/(\d+)", link)
+                if steam_m:
+                    image = f"https://steamstatic.com{steam_m.group(1)}/header.jpg"
+                else:
+                    img_m = re.search(r'<img[^>]+src="([^"]+)"', content)
+                    image = html.unescape(img_m.group(1)) if img_m else ""
+
+                clean_title = re.sub(r"^\[.*?\]\s*(?:\(.*?\)\s*)?", "", title).strip()
+
                 deals.append({
-                    "id": f"cs_{d['dealID']}",
-                    "title": d.get("title", "Game"),
-                    "desc": f"Steam reytingi: {d.get('steamRatingText', 'Yaxshi')}",
-                    "store": stores.get(str(d.get("storeID")), "PC Store"),
-                    "orig": float(d.get("normalPrice", 0)),
-                    "final": float(d.get("salePrice", 0)),
-                    "disc": int(round(float(d.get("savings", 0)))),
-                    "image": f"https://steamstatic.com{steam_id}/header.jpg" if steam_id else d.get("thumb", ""),
-                    "link": f"https://cheapshark.com{d['dealID']}"
+                    "id": eid,
+                    "title": clean_title,
+                    "store": store,
+                    "sale": sale if sale is not None else 0.0,
+                    "disc": disc,
+                    "image": image,
+                    "link": link
                 })
-    except Exception as e:
-        print("Deals xato:", e)
+        except Exception as e:
+            print("Feed xato:", e)
     return deals
 
 def main():
     if not BOT_TOKEN:
-        print("XATO: BOT_TOKEN bo'sh!")
         return
+
+    state = load_json(STATE_FILE, {"offset": 0, "users": []})
+    handle_bot_users(state)
 
     usd_uzs, rub_uzs = get_rates()
-    sent_ids = load_sent()
+    sent_ids = load_json(DB_FILE, [])
     deals = fetch_deals()
-    print("Topilgan chegirmalar:", len(deals))
-
-    if not deals:
-        send_tg(CHANNEL_ID, "✅ <b>PULSE bot @gametraverse kanaliga muvaffaqiyatli ulandi!</b>\nTez orada yangi chegirmalar va bepul o'yinlar chiqadi.")
-        return
+    print("Topilgan o'yinlar:", len(deals))
 
     updated = False
     count = 0
     for d in deals:
         if d["id"] not in sent_ids:
-            uzs_new = f"{int(round(d['final'] * usd_uzs, -2)):,}".replace(",", " ")
-            rub_new = f"{int(round((d['final'] * usd_uzs) / rub_uzs)):,}".replace(",", " ")
-            uzs_old = f"{int(round(d['orig'] * usd_uzs, -2)):,}".replace(",", " ")
+            is_free = d["sale"] == 0
+            disc_txt = f"-{d['disc']}%" if d["disc"] else "CHEGIRMA"
+            header = "🎁 <b>100% BEPUL O'YIN!</b>" if is_free else f"🔥 <b>KATTA CHEGIRMA ({disc_txt})!</b>"
 
-            is_free = d["final"] == 0
-            header = "🎁 <b>100% BEPUL O'YIN!</b>" if is_free else f"🔥 <b>KATTA CHEGIRMA (-{d['disc']}%)!</b>"
-            price_line = "<b>0$ / 0 so'm / 0 ₽ (BEPUL)</b>" if is_free else (
-                f"<b>${d['final']:.2f}</b> | <b>{uzs_new} so'm</b> | <b>{rub_new} ₽</b>"
+            uzs_new = f"{int(round(d['sale'] * usd_uzs, -2)):,}".replace(",", " ")
+            rub_new = f"{int(round((d['sale'] * usd_uzs) / rub_uzs)):,}".replace(",", " ")
+            price_line = "<b>0$ / 0 so'm / 0 ₽ (100% BEPUL)</b>" if is_free else (
+                f"<b>${d['sale']:.2f}</b> | <b>{uzs_new} so'm</b> | <b>{rub_new} ₽</b>"
             )
+
             msg = (
                 f"{header}\n\n"
                 f"🎮 <b>{html.escape(d['title'])}</b>\n"
-                f"📝 <i>{html.escape(d['desc'])}</i>\n\n"
-                f"🏪 <b>Do'kon:</b> {d['store']}\n"
-                f"❌ <b>Eski narxi:</b> <s>${d['orig']:.2f} ({uzs_old} so'm)</s>\n"
-                f"✅ <b>Yangi narxi:</b> {price_line}\n"
-                f"⏳ <b>Muddat:</b> Cheklangan vaqt"
+                f"🏪 <b>Do'kon:</b> {html.escape(d['store'])}\n"
+                f"✅ <b>Chegirma narxi:</b> {price_line}\n"
+                f"⏳ <b>Muddat:</b> Aksiya tugaguncha (cheklangan vaqt)"
             )
             if send_tg(CHANNEL_ID, msg, d["image"], d["link"]):
                 sent_ids.append(d["id"])
                 updated = True
                 count += 1
+                # Obuna bo'lgan bot foydalanuvchilariga ham yuborish
+                for uid in list(state.get("users", [])):
+                    send_tg(uid, msg, d["image"], d["link"])
                 if count >= 5:
                     break
 
     if updated:
-        save_sent(sent_ids)
+        save_json(DB_FILE, sent_ids[-300:])
+    save_json(STATE_FILE, state)
 
 if __name__ == "__main__":
     main()
