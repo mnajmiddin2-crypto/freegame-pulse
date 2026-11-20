@@ -5,12 +5,12 @@ import html
 import requests
 
 RAW_TOKEN = (os.environ.get("BOT_TOKEN") or "").strip()
-print("Token uzunligi:", len(RAW_TOKEN), "| Boshlanishi:", RAW_TOKEN[:6])
-
 m = re.search(r"(\d+:[A-Za-z0-9_-]{20,})", RAW_TOKEN)
 BOT_TOKEN = m.group(1) if m else RAW_TOKEN
 
-TG_URL = f"https://telegram.org{BOT_TOKEN}"
+# URL ni qismlarga bo'lib yig'amiz (brauzer kengaytmalari buzib qo'ymasligi uchun)
+HOST = "api." + "telegram.org"
+TG_URL = f"https://{HOST}/bot{BOT_TOKEN}"
 CHANNEL_ID = "@gametraverse"
 DB_FILE = "sent_games.json"
 
@@ -58,13 +58,17 @@ def get_rates():
 
 def fetch_deals():
     deals = []
-    # 1. IsThereAnyDeal / CheapShark ochiq feed (corsproxy.io orqali)
+    # GitHub serverlaridan 100% ochiq ishlaydigan CheapShark mirror / Steam API
     try:
-        target = "https://cheapshark.com"
-        r = requests.get(f"https://corsproxy.io?{requests.utils.quote(target)}", timeout=20)
-        if r.status_code == 200 and r.text.strip().startswith("["):
+        # Steam wishlist / featured deals JSON (hech qanday proksisiz ishlaydigan endpoint)
+        r = requests.get("https://steampowered.com", timeout=15)
+        # Asosiy manba: CheapShark deals (to'g'ridan-to'g'ri maxsus User-Agent bilan)
+        cs_headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36", "Accept": "application/json"}
+        r2 = requests.get("https://cheapshark.com", headers=cs_headers, timeout=20)
+        print("CheapShark status:", r2.status_code)
+        if r2.status_code == 200 and r2.text.strip().startswith("["):
             stores = {"1": "Steam", "7": "GOG", "25": "Epic Games Store"}
-            for d in r.json():
+            for d in r2.json():
                 steam_id = d.get("steamAppID")
                 deals.append({
                     "id": f"cs_{d['dealID']}",
