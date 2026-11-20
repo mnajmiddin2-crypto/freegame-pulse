@@ -1,9 +1,14 @@
 import os
+import re
 import json
 import html
 import requests
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
+RAW_TOKEN = (os.environ.get("BOT_TOKEN") or "").strip()
+# Agar token URL ko'rinishida kiritilgan bo'lsa, faqat haqiqiy token qismini ajratib olamiz
+m = re.search(r"(\d+:[A-Za-z0-9_-]+)", RAW_TOKEN)
+BOT_TOKEN = m.group(1) if m else RAW_TOKEN
+
 CHANNEL_ID = "@gametraverse"
 DB_FILE = "sent_games.json"
 
@@ -28,7 +33,6 @@ def send_tg(chat_id, text, photo=None, url=None):
             data["reply_markup"] = markup
         try:
             r = requests.post(f"https://telegram.org{BOT_TOKEN}/sendPhoto", data=data, timeout=20)
-            print("sendPhoto:", r.status_code, r.text)
             if r.status_code == 200:
                 return True
         except Exception as e:
@@ -38,11 +42,10 @@ def send_tg(chat_id, text, photo=None, url=None):
     if markup:
         data["reply_markup"] = markup
     r = requests.post(f"https://telegram.org{BOT_TOKEN}/sendMessage", data=data, timeout=20)
-    print("sendMessage:", r.status_code, r.text)
+    print("Telegram javob:", r.status_code, r.text)
     return r.status_code == 200
 
 def reply_bot_users():
-    # Botga shaxsiy chatda /start yozganlarga javob berish
     try:
         r = requests.get(f"https://telegram.org{BOT_TOKEN}/getUpdates", timeout=15).json()
         for upd in r.get("result", []):
@@ -64,23 +67,21 @@ def get_rates():
         return 12800.0, 135.0
 
 def fetch_deals():
-    # GitHub serverlaridan bloklanmaydigan ochiq o'yin chegirmalari feedi (Steam/Epic)
     deals = []
-    # 1. SteamSpy TOP chegirmalar API (Cloudflare'siz, har doim ochiq)
+    # SteamSpy TOP chegirmalar va bepul o'yinlar
     try:
         r = requests.get("https://steamspy.com", timeout=20)
-        print("SteamSpy status:", r.status_code)
         if r.status_code == 200 and r.text.strip().startswith("{"):
             data = r.json()
             for appid, info in data.items():
                 disc = int(info.get("discount") or 0)
                 price_cents = int(info.get("price") or 0)
                 init_cents = int(info.get("initialprice") or 0)
-                if init_cents > 0 and (price_cents == 0 or disc >= 50):
+                if init_cents > 0 and (price_cents == 0 or disc >= 30):
                     deals.append({
                         "id": f"spy_{appid}_{disc}",
                         "title": info.get("name", "Steam Game"),
-                        "desc": f"Janr/Tegs: {', '.join(list((info.get('tags') or {}).keys())[:4])}",
+                        "desc": f"Developer: {info.get('developer', 'Steam')}",
                         "store": "Steam",
                         "orig": init_cents / 100.0,
                         "final": price_cents / 100.0,
