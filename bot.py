@@ -202,12 +202,11 @@ def on_msg(cid, txt, st):
 
 def poll():
     st = load_state()
-    off = 0
-    while True:
-        try:
-            r = requests.get(f"{TG_URL}/getUpdates", params={"offset": off, "timeout": 25}, timeout=30).json()
-            for u in r.get("result", []):
-        def step(off, st):
+        elif txt in (UI["uz"]["rates"], UI["ru"]["rates"], UI["en"]["rates"]):
+        u, r = get_rates()
+        send(cid, UI[l]["r_msg"].format(usd=f"{int(round(u)):,}".replace(",", " "), rub=f"{r:.1f}"), main_kb(l))
+
+def step(off, st):
     r = requests.get(f"{TG_URL}/getUpdates", params={"offset": off, "timeout": 25}, timeout=30).json()
     for u in r.get("result", []):
         off = u["update_id"] + 1
@@ -217,7 +216,7 @@ def poll():
             cb = u["callback_query"]
             cid = str(cb["message"]["chat"]["id"])
             if cb.get("data", "").startswith("setlang:"):
-                ch = cb["data"].split(":")
+                ch = cb["data"].split(":")[1]
                 st["users"][cid] = ch
                 save_state(st)
                 requests.post(f"{TG_URL}/answerCallbackQuery", data={"callback_query_id": cb["id"]}, timeout=10)
@@ -255,4 +254,3 @@ if __name__ == "__main__":
     threading.Thread(target=poll, daemon=True).start()
     threading.Thread(target=notify, daemon=True).start()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
-
