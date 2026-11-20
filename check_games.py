@@ -1,20 +1,14 @@
 import os
 import json
 import html
-from datetime import datetime, timezone, timedelta
+import re
+import xml.etree.ElementTree as ET
 import requests
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHANNEL_ID = os.environ.get("CHANNEL_ID", "@gametraverse")
 DB_FILE = "sent_games.json"
-HEADERS = {"User-Agent": "FreeGamePulseBot/2.0"}
-TZ = timezone(timedelta(hours=5))  # Toshkent vaqti (UTC+5)
-
-STORES = {
-    "1": "Steam",
-    "7": "GOG",
-    "25": "Epic Games Store"
-}
+HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; FreeGamePulse/3.0; +https://github.com)"}
 
 def load_sent():
     if os.path.exists(DB_FILE):
@@ -30,19 +24,18 @@ def save_sent(ids):
         json.dump(ids[-300:], f, indent=2)
 
 def get_rates():
-    # O'zbekiston Markaziy bankidan jonli USD va RUB kurslarini olish
+    # Ochiq va bloklanmaydigan xalqaro valyuta API
     usd_uzs = 12800.0
     rub_uzs = 135.0
     try:
-        r = requests.get("https://cbu.uz", timeout=15)
+        r = requests.get("https://er-api.com", timeout=15)
         if r.status_code == 200:
-            for item in r.json():
-                if item.get("Ccy") == "USD":
-                    usd_uzs = float(item["Rate"])
-                elif item.get("Ccy") == "RUB":
-                    rub_uzs = float(item["Rate"])
+            rates = r.json().get("rates", {})
+            usd_uzs = float(rates.get("UZS", 12800.0))
+            rub_rate = float(rates.get("RUB", 95.0))
+            rub_uzs = usd_uzs / rub_rate if rub_rate > 0 else 135.0
     except Exception as e:
-        print("Valyuta kursi xatosi (standart kurs ishlatiladi):", e)
+        print("Kurs olish xatosi:", e)
     return usd_uzs, rub_uzs
 
 def format_prices(usd_price, usd_uzs, rub_uzs):
@@ -54,62 +47,81 @@ def format_prices(usd_price, usd_uzs, rub_uzs):
     rub_str = f"{rub:,}".replace(",", " ")
     return f"<b>${usd_price:.2f}</b> | <b>{uzs_str} so'm</b> | <b>{rub_str} ₽</b>"
 
-def fetch_deals():
-    # Steam (1), GOG (7), Epic Games (25) — kamida 75% chegirmali o'yinlar
-    url = "https://cheapshark.com"
+def fetch_deals_rss():
+    # Reddit GameDeals RSS — Steam, Epic Games, GOG bepul va chegirmali o'yinlari
+    url = "https://reddit.com"
     deals = []
     try:
         r = requests.get(url, headers=HEADERS, timeout=20)
+        print("RSS status:", r.status_code)
         if r.status_code != 200:
-            print("CheapShark status:", r.status_code)
             return []
-        for d in r.json():
-            deal_id = d.get("dealID")
-            title = d.get("title", "Unknown")
-            store_id = str(d.get("storeID", ""))
-            store_name = STORES.get(store_id, "PC Store")
-            sale_price = float(d.get("salePrice", 0))
-            normal_price = float(d.get("normalPrice", 0))
-            savings = int(round(float(d.get("savings", 0))))
-            thumb = d.get("thumb", "")
-            steam_id = d.get("steamAppID")
 
-            # Yuqori sifatli rasm olish (Steam bo'lsa katta banner, aks holda thumb)
-            image = f"https://steamstatic.com{steam_id}/header.jpg" if steam_id else thumb
-            link = f"https://cheapshark.com{deal_id}"
+        root = ET.fromstring(r.text)
+        ns = {"atom": "http://w3.org"}
+
+        for entry in root.findall("atom:entry", ns):
+            entry_id = entry.findtext("atom:id", default="", namespaces=ns)
+            raw_title = entry.findtext("atom:title", default="", namespaces=ns)
+            content = entry.findtext("atom:content", default="", namespaces=ns)
+
+            # Do'konni aniqlash
+            store_match = re.search(r"\[(.*?)\]", raw_title)
+            store = store_match.group(1) if store_match else "Game Store"
+            if not any(s in store.lower() for s in ("steam", "epic", "gog", "humble", "fanatical", "ubisoft")):
+                continue
+
+            # Narx va chegirma foizini matndan ajratish (masalan: $4.99 / 80% off yoki FREE / 100% off)
+            is_free = bool(re.search(r"\b(free|100%\s*off|\$0\.00|\$0)\b", raw_title, re.I))
+            price_match = re.search(r"\$(\d+(?:\.\d{1,2})?)", raw_title)
+            disc_match = re.search(r"(\d{2,3})%\s*off", raw_title, re.I)
+
+            sale_price = 0.0 if is_free else (float(price_match.group(1)) if price_match else None)
+            discount = 100 if is_free else (int(disc_match.group(1)) if disc_match else None)
+
+            # Faqat bepul yoki kamida 50% chegirmali o'yinlarni olamiz
+            if not is_free and (sale_price is None or (discount is not None and discount < 50)):
+                continue
+
+            # Asl do'kon havolasini va rasmni RSS ichidan olish
+            link_match = re.search(r'href="(https?://[^"]+)"[^>]*>\[link\]', content)
+            game_link = html.unescape(link_match.group(1)) if link_match else ""
+            if not game_link:
+                link_el = entry.find("atom:link", ns)
+                game_link = link_el.attrib.get("href", "") if link_el is not None else ""
+
+            img_match = re.search(r'<img[^>]+src="([^"]+)"', content)
+            image = html.unescape(img_match.group(1)) if img_match else ""
+
+            clean_title = re.sub(r"^\[.*?\]\s*", "", raw_title).strip()
 
             deals.append({
-                "id": f"deal_{deal_id}",
-                "title": title,
-                "store": store_name,
-                "sale": sale_price,
-                "normal": normal_price,
-                "savings": savings,
+                "id": entry_id,
+                "title": clean_title,
+                "store": store,
+                "sale": sale_price if sale_price is not None else 0.0,
+                "discount": discount,
                 "image": image,
-                "link": link
+                "link": game_link
             })
     except Exception as e:
-        print("Deals API xatosi:", e)
+        print("RSS xatosi:", e)
     return deals
 
 def send_post(deal, usd_uzs, rub_uzs):
     is_free = deal["sale"] == 0
-    header = "🎁 <b>100% BEPUL O'YIN!</b>" if is_free else f"🔥 <b>KATTA CHEGIRMA (-{deal['savings']}%)!</b>"
-    btn_text = "📥 Bepul olish" if is_free else "🛒 Chegirmada olish"
-
-    old_price_str = format_prices(deal["normal"], usd_uzs, rub_uzs).replace("<b>", "").replace("</b>", "")
-    new_price_str = format_prices(deal["sale"], usd_uzs, rub_uzs)
+    disc_txt = f"-{deal['discount']}%" if deal["discount"] else "CHEGIRMA"
+    header = "🎁 <b>100% BEPUL O'YIN!</b>" if is_free else f"🔥 <b>O'YIN CHEGIRMASI ({disc_txt})!</b>"
+    btn_text = "📥 Bepul olish" if is_free else "🛒 Sahifaga o'tish"
+    price_str = format_prices(deal["sale"], usd_uzs, rub_uzs)
 
     caption = (
         f"{header}\n\n"
         f"🎮 <b>{html.escape(deal['title'])}</b>\n"
-        f"🏪 <b>Do'kon:</b> {deal['store']}\n"
-        f"📉 <b>Chegirma:</b> -{deal['savings']}%\n\n"
-        f"❌ <b>Eski narxi:</b> <s>{old_price_str}</s>\n"
-        f"✅ <b>Yangi narxi:</b> {new_price_str}\n\n"
+        f"🏪 <b>Do'kon:</b> {html.escape(deal['store'])}\n"
+        f"💰 <b>Chegirma narxi:</b> {price_str}\n"
         f"⏳ <b>Muddat:</b> Aksiya tugaguncha (cheklangan vaqt)"
     )
-
     markup = {"inline_keyboard": [[{"text": btn_text, "url": deal["link"]}]]}
 
     if deal["image"]:
@@ -125,7 +137,7 @@ def send_post(deal, usd_uzs, rub_uzs):
             timeout=20
         )
         if res.status_code == 200:
-            print("Yuborildi:", deal["title"])
+            print("Rasm bilan yuborildi:", deal["title"])
             return True
 
     res = requests.post(
@@ -138,7 +150,7 @@ def send_post(deal, usd_uzs, rub_uzs):
         },
         timeout=20
     )
-    print("Matn yuborildi:", deal["title"], res.status_code)
+    print("Telegram javobi:", res.status_code, res.text)
     return res.status_code == 200
 
 def main():
@@ -148,13 +160,12 @@ def main():
 
     sent_ids = load_sent()
     usd_uzs, rub_uzs = get_rates()
-    print(f"Kurs: 1 USD = {usd_uzs} UZS | 1 RUB = {rub_uzs} UZS")
+    print(f"Jonli kurs: 1 USD = {usd_uzs:.2f} UZS | 1 RUB = {rub_uzs:.2f} UZS")
 
-    deals = fetch_deals()
-    print(f"Topilgan chegirmalar soni: {len(deals)}")
+    deals = fetch_deals_rss()
+    print(f"Topilgan o'yinlar soni: {len(deals)}")
     updated = False
 
-    # Birinchi ishga tushganda kanal to'lib ketmasligi uchun eng sara 5 tasini yuboramiz
     count = 0
     for deal in deals:
         if deal["id"] not in sent_ids:
