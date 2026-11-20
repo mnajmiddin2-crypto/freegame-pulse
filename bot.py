@@ -98,8 +98,7 @@ def get_rates():
         r = requests.get("https://er-api.com", timeout=10).json()
         uzs = float(r["rates"]["UZS"])
         rub_in_usd = float(r["rates"]["RUB"])
-        rub_uzs = uzs / rub_in_usd
-        return uzs, rub_uzs
+        return uzs, uzs / rub_in_usd
     except Exception:
         return 12800.0, 135.0
 
@@ -111,7 +110,6 @@ def get_games_list(store_filter, only_free):
         "https://reddit.com"
     ]
     ns = {"atom": "http://w3.org"}
-
     for url in feeds:
         try:
             r = requests.get(url, headers=headers, timeout=12)
@@ -122,37 +120,23 @@ def get_games_list(store_filter, only_free):
                 eid = entry.findtext("atom:id", default="", namespaces=ns)
                 title = entry.findtext("atom:title", default="", namespaces=ns)
                 content = entry.findtext("atom:content", default="", namespaces=ns)
-
                 if "expired" in title.lower():
                     continue
                 if store_filter == "steam" and "[steam" not in title.lower():
                     continue
                 if store_filter == "epic" and "[epic" not in title.lower():
                     continue
-
                 is_free = bool(re.search(r"\b(free|100%\s*off|\$0\.00|\$0)\b", title, re.I))
-                if only_free and not is_free:
+                if only_free != is_free:
                     continue
-                if not only_free and is_free:
-                    continue
-
                 price_m = re.search(r"\$(\d+(?:\.\d{1,2})?)", title)
                 disc_m = re.search(r"(\d{2,3})%\s*off", title, re.I)
                 sale = 0.0 if is_free else (float(price_m.group(1)) if price_m else 0.0)
                 disc = 100 if is_free else (int(disc_m.group(1)) if disc_m else 50)
-
                 link_m = re.search(r'href="(https?://[^"]+)"[^>]*>\[link\]', content)
                 link = html.unescape(link_m.group(1)) if link_m else ""
                 clean_title = re.sub(r"^\[.*?\]\s*(?:\(.*?\)\s*)?", "", title).strip()
-
-                results.append({
-                    "id": eid,
-                    "title": clean_title,
-                    "sale": sale,
-                    "disc": disc,
-                    "is_free": is_free,
-                    "link": link
-                })
+                results.append({"id": eid, "title": clean_title, "sale": sale, "disc": disc, "is_free": is_free, "link": link})
                 if len(results) >= 8:
                     return results
         except Exception:
@@ -176,15 +160,32 @@ def format_list_message(games, title_header, lang):
     return "\n".join(lines)
 
 def send_msg(chat_id, text, reply_markup=None):
-    data = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True
-    }
+    data = {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
     if reply_markup:
         data["reply_markup"] = reply_markup
     requests.post(f"{TG_URL}/sendMessage", data=data, timeout=15)
+
+def handle_message(cid, text, state):
+    lang = state["users"].get(cid, "uz")
+    if text in ("/start", "/lang") or text in (UI["uz"]["btn_lang"], UI["ru"]["btn_lang"], UI["en"]["btn_lang"]):
+        send_msg(cid, "🌍 <b>Tilni tanlang / Выберите язык / Choose language:</b>", LANG_INLINE)
+    elif text in (UI["uz"]["btn_steam_sale"], UI["ru"]["btn_steam_sale"], UI["en"]["btn_steam_sale"]):
+        send_msg(cid, UI[lang]["loading"])
+        send_msg(cid, format_list_message(get_games_list("steam", False), UI[lang]["btn_steam_sale"], lang), get_main_keyboard(lang))
+    elif text in (UI["uz"]["btn_steam_free"], UI["ru"]["btn_steam_free"], UI["en"]["btn_steam_free"]):
+        send_msg(cid, UI[lang]["loading"])
+        send_msg(cid, format_list_message(get_games_list("steam", True), UI[lang]["btn_steam_free"], lang), get_main_keyboard(lang))
+    elif text in (UI["uz"]["btn_epic_sale"], UI["ru"]["btn_epic_sale"], UI["en"]["btn_epic_sale"]):
+        send_msg(cid, UI[lang]["loading"])
+        send_msg(cid, format_list_message(get_games_list("epic", False), UI[lang]["btn_epic_sale"], lang), get_main_keyboard(lang))
+    elif text in (UI["uz"]["btn_epic_free"], UI["ru"]["btn_epic_free"], UI["en"]["btn_epic_free"]):
+        send_msg(cid, UI[lang]["loading"])
+        send_msg(cid, format_list_message(get_games_list("epic", True), UI[lang]["btn_epic_free"], lang), get_main_keyboard(lang))
+    elif text in (UI["uz"]["btn_rates"], UI["ru"]["btn_rates"], UI["en"]["btn_rates"]):
+        usd, rub = get_rates()
+        usd_s = f"{int(round(usd)):,}".replace(",", " ")
+        rub_s = f"{rub:.1f}"
+        send_msg(cid, UI[lang]["rates_msg"].format(usd=usd_s, rub=rub_s), get_main_keyboard(lang))
 
 def bot_polling():
     state = load_state()
@@ -194,43 +195,9 @@ def bot_polling():
             r = requests.get(f"{TG_URL}/getUpdates", params={"offset": offset, "timeout": 25}, timeout=30).json()
             for upd in r.get("result", []):
                 offset = upd["update_id"] + 1
-
                 if "message" in upd:
                     msg = upd["message"]
-                    cid = str(msg["chat"]["id"])
-                    text = (msg.get("text") or "").strip()
-                    lang = state["users"].get(cid, "uz")
-
-                    if text in ("/start", "/lang") or text in (UI["uz"]["btn_lang"], UI["ru"]["btn_lang"], UI["en"]["btn_lang"]):
-                        send_msg(cid, "🌍 <b>Tilni tanlang / Выберите язык / Choose language:</b>", LANG_INLINE)
-
-                    elif text in (UI["uz"]["btn_steam_sale"], UI["ru"]["btn_steam_sale"], UI["en"]["btn_steam_sale"]):
-                        send_msg(cid, UI[lang]["loading"])
-                        games = get_games_list("steam", only_free=False)
-                        send_msg(cid, format_list_message(games, UI[lang]["btn_steam_sale"], lang), get_main_keyboard(lang))
-
-                    elif text in (UI["uz"]["btn_steam_free"], UI["ru"]["btn_steam_free"], UI["en"]["btn_steam_free"]):
-                        send_msg(cid, UI[lang]["loading"])
-                        games = get_games_list("steam", only_free=True)
-                        send_msg(cid, format_list_message(games, UI[lang]["btn_steam_free"], lang), get_main_keyboard(lang))
-
-                    elif text in (UI["uz"]["btn_epic_sale"], UI["ru"]["btn_epic_sale"], UI["en"]["btn_epic_sale"]):
-                        send_msg(cid, UI[lang]["loading"])
-                        games = get_games_list("epic", only_free=False)
-                        send_msg(cid, format_list_message(games, UI[lang]["btn_epic_sale"], lang), get_main_keyboard(lang))
-
-                    elif text in (UI["uz"]["btn_epic_free"], UI["ru"]["btn_epic_free"], UI["en"]["btn_epic_free"]):
-                        send_msg(cid, UI[lang]["loading"])
-                        games = get_games_list("epic", only_free=True)
-                        send_msg(cid, format_list_message(games, UI[lang]["btn_epic_free"], lang), get_main_keyboard(lang))
-
-                    elif text in (UI["uz"]["btn_rates"], UI["ru"]["btn_rates"], UI["en"]["btn_rates"]):
-                                       elif text in (UI["uz"]["btn_rates"], UI["ru"]["btn_rates"], UI["en"]["btn_rates"]):
-                        usd, rub = get_rates()
-                        usd_s = f"{int(round(usd)):,}".replace(",", " ")
-                        rub_s = f"{rub:.1f}"
-                        send_msg(cid, UI[lang]["rates_msg"].format(usd=usd_s, rub=rub_s), get_main_keyboard(lang))
-
+                    handle_message(str(msg["chat"]["id"]), (msg.get("text") or "").strip(), state)
                 elif "callback_query" in upd:
                     cb = upd["callback_query"]
                     cid = str(cb["message"]["chat"]["id"])
@@ -242,30 +209,3 @@ def bot_polling():
                         requests.post(f"{TG_URL}/answerCallbackQuery", data={"callback_query_id": cb["id"]}, timeout=10)
                         send_msg(cid, UI[chosen]["menu_title"], get_main_keyboard(chosen))
         except Exception as e:
-            print("Polling xatosi:", e)
-            time.sleep(3)
-
-def auto_notifier():
-    while True:
-        time.sleep(10800)
-        state = load_state()
-        free_games = get_games_list("steam", True) + get_games_list("epic", True)
-        for g in free_games:
-            if g["id"] not in state["sent"]:
-                state["sent"].append(g["id"])
-                state["sent"] = state["sent"][-200:]
-                save_state(state)
-                alert = f"🚨 <b>YANGI TEKIN O'YIN ESLATMASI!</b>\n\n🎮 <a href='{g['link']}'><b>{html.escape(g['title'])}</b></a>\n💰 <b>0$ / 0 so'm / 0 ₽ (100% BEPUL)</b>"
-                send_msg(CHANNEL_ID, alert)
-                for uid in list(state["users"].keys()):
-                    send_msg(uid, alert)
-
-@app.route("/")
-def home():
-    return "FreeGame Pulse 24/7 Bot is running!"
-
-if __name__ == "__main__":
-    threading.Thread(target=bot_polling, daemon=True).start()
-    threading.Thread(target=auto_notifier, daemon=True).start()
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
