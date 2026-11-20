@@ -5,7 +5,6 @@
 import html
 import json
 import os
-import sys
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -88,7 +87,7 @@ def tg(method, **payload):
     try:
         r = requests.post(f"{API}/{method}", json=payload, timeout=30)
         return r.json()
-    except Exception as e:  # tarmoq xatosi
+    except Exception as e:
         return {"ok": False, "description": str(e)}
 
 
@@ -132,7 +131,7 @@ def fetch_epic():
         price = (el.get("price") or {}).get("totalPrice") or {}
         original = price.get("originalPrice") or 0
         if price.get("discountPrice") != 0 or original <= 0:
-            continue  # 100% chegirma emas
+            continue
 
         slug = el.get("productSlug") or ""
         if not slug:
@@ -188,7 +187,6 @@ def fetch_steam():
             continue
         seen.add(appid)
 
-        # faqat o'yinlar (DLC, soundtrack va h.k. emas)
         try:
             det = get_json("https://store.steampowered.com/api/appdetails",
                            {"appids": appid, "cc": "us", "l": "english"})
@@ -232,103 +230,51 @@ def send_game(chat_id, game, lang):
         res = tg("sendPhoto", chat_id=chat_id, photo=game["image"], caption=caption,
                  parse_mode="HTML", reply_markup=markup)
     if not res.get("ok"):
-        if res.get("error_code") in (403, 400) and "chat not found" in str(res.get("description", "")):
-            return res
-        res = tg("sendMessage", chat_id=chat_id, text=caption, parse_mode="HTML",
-                 reply_markup=markup, link_preview_options={"is_disabled": True})
-    return res
+        desc = str(res.get("description", "")).lower()
+        if res.get("error_code") in (403, 400) and ("blocked" in desc or "chat not found" in desc):
+            return False
+        res = tg("sendMessage", chat_id=chat_id, text=caption,
+                 parse_mode="HTML", reply_markup=markup)
+    return res.get("ok", False)
 
 
-# ---------------------------------------------------------------- foydalanuvchilar
-def lang_keyboard():
-    return {"inline_keyboard": [[
-        {"text": "🇺🇿 O'zbekcha", "callback_data": "lang:uz"},
-        {"text": "🇷🇺 Русский", "callback_data": "lang:ru"},
-        {"text": "🇬🇧 English", "callback_data": "lang:en"},
-    ]]}
-
-
+# ---------------------------------------------------------------- bot xabarlarini o'qish
 def process_updates(state):
-    tg("deleteWebhook")  # getUpdates ishlashi uchun webhook bo'lmasligi kerak
-    res = tg("getUpdates", offset=state["offset"], timeout=0,
-             allowed_updates=["message", "callback_query"])
+    offset = state.get("offset", 0)
+    users = state.setdefault("users", {})
+    res = tg("getUpdates", offset=offset, timeout=5)
     if not res.get("ok"):
-        print("getUpdates xato:", res)
         return
-    users = state["users"]
 
-    for u in res.get("result", []):
-        state["offset"] = u["update_id"] + 1
+    lang_kb = {
+        "inline_keyboard": [[
+            {"text": "🇺🇿 O'zbek", "callback_data": "lang:uz"},
+            {"text": "🇷🇺 Русский", "callback_data": "lang:ru"},
+            {"text": "🇬🇧 English", "callback_data": "lang:en"},
+        ]]
+    }
 
-        if "message" in u:
-            m = u["message"]
-            if m["chat"].get("type") != "private":
-                continue
-            cid = str(m["chat"]["id"])
-            text = (m.get("text") or "").strip().lower()
-            if text.startswith("/start") or text.startswith("/lang"):
-                tg("sendMessage", chat_id=cid,
-                   text="🇺🇿 Tilni tanlang · 🇷🇺 Выберите язык · 🇬🇧 Choose language",
-                   reply_markup=lang_keyboard())
-            elif text.startswith("/stop"):
-                lang = users.pop(cid, "uz")
+    for upd in res.get("result", []):
+        state["offset"] = upd["update_id"] + 1
+        if "message" in upd:
+            msg = upd["message"]
+            cid = str(msg["chat"]["id"])
+            text = (msg.get("text") or "").strip()
+            lang = users.get(cid, "uz")
+            if text in ("/start", "/lang"):
+                tg("sendMessage", chat_id=cid, text=TEXTS[lang]["welcome"], reply_markup=lang_kb)
+            elif text == "/stop":
+                users.pop(cid, None)
                 tg("sendMessage", chat_id=cid, text=TEXTS[lang]["stopped"])
-
-        elif "callback_query" in u:
-            cq = u["callback_query"]
-            data = cq.get("data", "")
-            if data.startswith("lang:") and data[5:] in TEXTS:
-                lang = data[5:]
-                cid = str(cq["message"]["chat"]["id"])
+        elif "callback_query" in upd:
+            cb = upd["callback_query"]
+            cid = str(cb["message"]["chat"]["id"])
+            data = cb.get("data", "")
+            if data.startswith("lang:"):
+                lang = data.split(":")[1]
                 users[cid] = lang
-                tg("answerCallbackQuery", callback_query_id=cq["id"])
-                tg("sendMessage", chat_id=cid, text=TEXTS[lang]["saved"])
+                tg("answerCallbackQuery", callback_query_id=cb["id"])
+                tg("editMessageText", chat_id=cid, message_id=cb["message"]["message_id"],
+                   text=TEXTS[lang]["saved"])
 
 
-# ---------------------------------------------------------------- asosiy
-def main():
-    sent = load_json(SENT_FILE, [])
-    state = load_json(STATE_FILE, {"offset": 0, "users": {}})
-    state.setdefault("offset", 0)
-    state.setdefault("users", {})
-
-    process_updates(state)
-
-    games, failed = [], 0
-    for name, fn in (("Epic", fetch_epic), ("Steam", fetch_steam)):
-        try:
-            found = fn()
-            print(f"{name}: {len(found)} ta bepul o'yin topildi")
-            games += found
-        except Exception as e:
-            failed += 1
-            print(f"{name} xato: {e}")
-
-    new_games = [g for g in games if g["key"] not in sent]
-    print(f"Yangi: {len(new_games)}")
-
-    for g in new_games:
-        res = send_game(CHANNEL, g, "uz")
-        if not res.get("ok"):
-            print(f"Kanalga yuborilmadi ({g['title']}): {res}")
-            continue
-        sent.append(g["key"])
-        print(f"Kanalga yuborildi: {g['title']}")
-        time.sleep(1)
-
-        for cid, lang in list(state["users"].items()):
-            r = send_game(cid, g, lang)
-            if not r.get("ok") and r.get("error_code") == 403:
-                state["users"].pop(cid, None)  # foydalanuvchi botni bloklagan
-            time.sleep(0.05)
-
-    sent = sent[-1000:]
-    save_json(SENT_FILE, sent)
-    save_json(STATE_FILE, state)
-
-    if failed == 2:
-        sys.exit(1)
-
-
-if __name__ == "__main__":
-    main()
