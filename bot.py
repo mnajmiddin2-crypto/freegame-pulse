@@ -5,7 +5,7 @@ from flask import Flask
 RAW_TOKEN = (os.environ.get("BOT_TOKEN") or "").strip()
 m = re.search(r"(\d+:[A-Za-z0-9_-]{20,})", RAW_TOKEN)
 BOT_TOKEN = m.group(1) if m else RAW_TOKEN
-TG_URL = "https://telegram.org" + BOT_TOKEN
+TG_URL = "https://" + "api.telegram.org/bot" + BOT_TOKEN
 CHANNEL_ID = "@gametraverse"
 STATE_FILE = "bot_users.json"
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36"}
@@ -18,8 +18,7 @@ UI = {
         "e_sale": "⚡ Epic Games chegirmalar", "e_free": "🎉 Epic Games tekinlar",
         "rates": "💱 Valyuta kurslari", "lang": "🌐 Tilni o'zgartirish",
         "load": "⏳ Ma'lumotlar yuklanmoqda...", "empty": "😔 Hozircha bu bo'limda faol aksiyalar topilmadi.",
-        "r_msg": "💱 <b>Valyuta kurslari:</b>\n\n🇺🇸 <b>1 USD</b> = <code>{usd}</code> so'm\n🇷🇺 <b>1 RUB</b> = <code>{rub}</code> so'm",
-        "until": "⏳ Muddat: Aksiya tugaguncha"
+        "r_msg": "💱 <b>Valyuta kurslari:</b>\n\n🇺🇸 <b>1 USD</b> = <code>{usd}</code> so'm\n🇷🇺 <b>1 RUB</b> = <code>{rub}</code> so'm"
     },
     "ru": {
         "menu": "🎮 <b>Главное меню:</b> Выберите раздел 👇",
@@ -27,8 +26,7 @@ UI = {
         "e_sale": "⚡ Скидки Epic Games", "e_free": "🎉 Бесплатно в Epic Games",
         "rates": "💱 Курсы валют", "lang": "🌐 Сменить язык",
         "load": "⏳ Загрузка...", "empty": "😔 В этом разделе пока нет активных акций.",
-        "r_msg": "💱 <b>Курсы валют:</b>\n\n🇺🇸 <b>1 USD</b> = <code>{usd}</code> сум\n🇷🇺 <b>1 RUB</b> = <code>{rub}</code> сум",
-        "until": "⏳ Срок: Пока действует акция"
+        "r_msg": "💱 <b>Курсы валют:</b>\n\n🇺🇸 <b>1 USD</b> = <code>{usd}</code> сум\n🇷🇺 <b>1 RUB</b> = <code>{rub}</code> сум"
     },
     "en": {
         "menu": "🎮 <b>Main Menu:</b> Choose a category below 👇",
@@ -36,8 +34,7 @@ UI = {
         "e_sale": "⚡ Epic Games Discounts", "e_free": "🎉 Epic Games Freebies",
         "rates": "💱 Exchange Rates", "lang": "🌐 Change Language",
         "load": "⏳ Loading...", "empty": "😔 No active deals in this section right now.",
-        "r_msg": "💱 <b>Exchange Rates:</b>\n\n🇺🇸 <b>1 USD</b> = <code>{usd}</code> UZS\n🇷🇺 <b>1 RUB</b> = <code>{rub}</code> UZS",
-        "until": "⏳ Duration: Limited time offer"
+        "r_msg": "💱 <b>Exchange Rates:</b>\n\n🇺🇸 <b>1 USD</b> = <code>{usd}</code> UZS\n🇷🇺 <b>1 RUB</b> = <code>{rub}</code> UZS"
     }
 }
 
@@ -72,8 +69,7 @@ def get_steam_games(free_only):
     res = []
     try:
         r = requests.get("https://steampowered.com", headers=HEADERS, timeout=15)
-        data = r.json()
-        items = (data.get("specials") or {}).get("items") or []
+        items = (r.json().get("specials") or {}).get("items") or []
         seen = set()
         for it in items:
             appid = it.get("id")
@@ -103,7 +99,7 @@ def get_steam_games(free_only):
             if len(res) >= 10:
                 break
     except Exception as e:
-        print("Steam err:", e)
+        print("Steam err:", e, flush=True)
     return res
 
 def get_epic_games(free_only):
@@ -155,7 +151,7 @@ def get_epic_games(free_only):
             if len(res) >= 10:
                 break
     except Exception as e:
-        print("Epic err:", e)
+        print("Epic err:", e, flush=True)
     return res
 
 def fmt_games(games, hdr, lang):
@@ -178,9 +174,12 @@ def send(cid, txt, kb=None):
     d = {"chat_id": cid, "text": txt, "parse_mode": "HTML", "disable_web_page_preview": True}
     if kb:
         d["reply_markup"] = kb
-    requests.post(f"{TG_URL}/sendMessage", data=d, timeout=15)
+    res = requests.post(f"{TG_URL}/sendMessage", data=d, timeout=15).json()
+    if not res.get("ok"):
+        print("Send err:", res, flush=True)
 
 def on_msg(cid, txt, st):
+    print(f"Xabar keldi: {cid} -> {txt}", flush=True)
     l = st["users"].get(cid, "uz")
     if txt in ("/start", "/lang", UI["uz"]["lang"], UI["ru"]["lang"], UI["en"]["lang"]):
         send(cid, "🌍 <b>Tilni tanlang / Выберите язык / Choose language:</b>", LANG_KB)
@@ -212,41 +211,9 @@ def handle_cb(cb, st):
 
 def step(off, st):
     r = requests.get(f"{TG_URL}/getUpdates", params={"offset": off, "timeout": 25}, timeout=30).json()
+    if not r.get("ok"):
+        print("Telegram API xatosi:", r, flush=True)
+        time.sleep(5)
+        return off
     for u in r.get("result", []):
         off = u["update_id"] + 1
-        if "message" in u:
-            on_msg(str(u["message"]["chat"]["id"]), (u["message"].get("text") or "").strip(), st)
-        elif "callback_query" in u:
-            handle_cb(u["callback_query"], st)
-    return off
-
-def poll():
-    st = load_state()
-    off = 0
-    while True:
-        try:
-            off = step(off, st)
-        except Exception as e:
-            print("Err:", e)
-            time.sleep(3)
-
-def notify():
-    while True:
-        time.sleep(10800)
-        st = load_state()
-        for g in get_steam_games(True) + get_epic_games(True):
-            if g["id"] not in st["sent"]:
-                st["sent"] = (st["sent"] + [g["id"]])[-200:]
-                save_state(st)
-                al = f"🚨 YANGI TEKIN O'YIN!\n\n🎮 <a href='{g['link']}'>{html.escape(g['title'])}</a>\n💰 ${g['orig']:.2f} ➡️ 0$ / 0 so'm / 0 ₽ (TEKIN)"
-                send(CHANNEL_ID, al)
-                for uid in list(st["users"].keys()):
-                    send(uid, al)
-
-@app.route("/")
-def home():
-    return "OK"
-
-threading.Thread(target=poll, daemon=True).start()
-threading.Thread(target=notify, daemon=True).start()
-app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
