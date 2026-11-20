@@ -207,11 +207,52 @@ def poll():
         try:
             r = requests.get(f"{TG_URL}/getUpdates", params={"offset": off, "timeout": 25}, timeout=30).json()
             for u in r.get("result", []):
-                off = u["update_id"] + 1
-                if "message" in u:
-                    on_msg(str(u["message"]["chat"]["id"]), (u["message"].get("text") or "").strip(), st)
-                elif "callback_query" in u:
-                    cb = u["callback_query"]
-                    cid = str(cb["message"]["chat"]["id"])
-                    if cb.get("data", "").startswith("setlang:"):
-                        ch = cb["data"].split(":")[1]
+        def step(off, st):
+    r = requests.get(f"{TG_URL}/getUpdates", params={"offset": off, "timeout": 25}, timeout=30).json()
+    for u in r.get("result", []):
+        off = u["update_id"] + 1
+        if "message" in u:
+            on_msg(str(u["message"]["chat"]["id"]), (u["message"].get("text") or "").strip(), st)
+        elif "callback_query" in u:
+            cb = u["callback_query"]
+            cid = str(cb["message"]["chat"]["id"])
+            if cb.get("data", "").startswith("setlang:"):
+                ch = cb["data"].split(":")
+                st["users"][cid] = ch
+                save_state(st)
+                requests.post(f"{TG_URL}/answerCallbackQuery", data={"callback_query_id": cb["id"]}, timeout=10)
+                send(cid, UI[ch]["menu"], main_kb(ch))
+    return off
+
+def poll():
+    st = load_state()
+    off = 0
+    while True:
+        try:
+            off = step(off, st)
+        except Exception as e:
+            print("Err:", e)
+            time.sleep(3)
+
+def notify():
+    while True:
+        time.sleep(10800)
+        st = load_state()
+        for g in get_steam_games(True) + get_epic_games(True):
+            if g["id"] not in st["sent"]:
+                st["sent"] = (st["sent"] + [g["id"]])[-200:]
+                save_state(st)
+                al = f"🚨 YANGI TEKIN O'YIN!\n\n🎮 <a href='{g['link']}'>{html.escape(g['title'])}</a>\n💰 ${g['orig']:.2f} ➡️ 0$ / 0 so'm / 0 ₽ (TEKIN)"
+                send(CHANNEL_ID, al)
+                for uid in list(st["users"].keys()):
+                    send(uid, al)
+
+@app.route("/")
+def home():
+    return "OK"
+
+if __name__ == "__main__":
+    threading.Thread(target=poll, daemon=True).start()
+    threading.Thread(target=notify, daemon=True).start()
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
