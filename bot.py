@@ -68,7 +68,6 @@ def get_rates():
     except Exception:
         return 12800.0, 135.0
 
-# --------------------------------------------------------- Steam (Rasmiy API)
 def get_steam_games(free_only):
     res = []
     try:
@@ -107,7 +106,6 @@ def get_steam_games(free_only):
         print("Steam err:", e)
     return res
 
-# --------------------------------------------------------- Epic Games (Rasmiy API)
 def get_epic_games(free_only):
     res = []
     try:
@@ -121,7 +119,6 @@ def get_epic_games(free_only):
             final_c = int(price.get("discountPrice") or 0)
             if orig_c <= 0 or final_c >= orig_c:
                 continue
-
             promos = el.get("promotions") or {}
             active = False
             end_s = ""
@@ -134,20 +131,17 @@ def get_epic_games(free_only):
                         end_s = ed.strftime("%d.%m.%Y")
             if not active and final_c == 0:
                 continue
-
             isf = (final_c == 0)
             if free_only != isf:
                 continue
-
             disc = int(round((1 - (final_c / orig_c)) * 100))
             slug = el.get("productSlug") or el.get("urlSlug") or ""
             for m_item in (el.get("catalogNs") or {}).get("mappings") or []:
                 if m_item.get("pageSlug"):
                     slug = m_item["pageSlug"]
                     break
-            slug = slug.split("/")[0]
+            slug = slug.split("/")[-1]
             link = f"https://epicgames.com{slug}" if slug else "https://epicgames.com"
-
             res.append({
                 "id": f"ep_{el['id']}",
                 "title": el.get("title", "Epic Game"),
@@ -212,12 +206,6 @@ def poll():
     while True:
         try:
             r = requests.get(f"{TG_URL}/getUpdates", params={"offset": off, "timeout": 25}, timeout=30).json()
-           def poll():
-    st = load_state()
-    off = 0
-    while True:
-        try:
-            r = requests.get(f"{TG_URL}/getUpdates", params={"offset": off, "timeout": 25}, timeout=30).json()
             for u in r.get("result", []):
                 off = u["update_id"] + 1
                 if "message" in u:
@@ -227,29 +215,3 @@ def poll():
                     cid = str(cb["message"]["chat"]["id"])
                     if cb.get("data", "").startswith("setlang:"):
                         ch = cb["data"].split(":")[1]
-                        st["users"][cid] = ch
-                        save_state(st)
-                        requests.post(f"{TG_URL}/answerCallbackQuery", data={"callback_query_id": cb["id"]}, timeout=10)
-                        send(cid, UI[ch]["menu"], main_kb(ch))
-        except Exception as e:
-            print("Err:", e)
-            time.sleep(3)
-def notify():
-    while True:
-        time.sleep(10800)
-        st = load_state()
-        for g in get_steam_games(True) + get_epic_games(True):
-            if g["id"] not in st["sent"]:
-                st["sent"] = (st["sent"] + [g["id"]])[-200:]
-                save_state(st)
-                al = f"🚨 YANGI TEKIN O'YIN!\n\n🎮 <a href='{g['link']}'>{html.escape(g['title'])}</a>\n💰 ${g['orig']:.2f} ➡️ 0$ / 0 so'm / 0 ₽ (TEKIN)"
-                send(CHANNEL_ID, al)
-                for uid in list(st["users"].keys()):
-                    send(uid, al)
-@app.route("/")
-def home():
-    return "OK"
-if __name__ == "__main__":
-    threading.Thread(target=poll, daemon=True).start()
-    threading.Thread(target=notify, daemon=True).start()
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
