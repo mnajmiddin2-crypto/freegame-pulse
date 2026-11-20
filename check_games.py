@@ -4,7 +4,7 @@ import html
 import requests
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-CHANNEL_ID = os.environ.get("CHANNEL_ID") or "@gametraverse"
+CHANNEL_ID = "@gametraverse"
 DB_FILE = "sent_games.json"
 
 def load_sent():
@@ -20,120 +20,92 @@ def save_sent(ids):
     with open(DB_FILE, "w", encoding="utf-8") as f:
         json.dump(ids[-300:], f, indent=2)
 
-def get_rates():
-    try:
-        r = requests.get("https://er-api.com", timeout=15)
-        if r.status_code == 200 and r.text.strip():
-            data = r.json()
-            uzs = float(data["rates"]["UZS"])
-            rub = float(data["rates"]["RUB"])
-            return uzs, uzs / rub
-    except Exception:
-        pass
-    return 12800.0, 135.0
-
-def send_tg(text, photo=None, url=None):
-    markup = json.dumps({"inline_keyboard": [[{"text": "📥 O'yinni olish", "url": url}]]}) if url else None
+def send_tg(chat_id, text, photo=None, url=None):
+    markup = json.dumps({"inline_keyboard": [[{"text": "📥 O'yinni ko'rish", "url": url}]]}) if url else None
     if photo:
-        data = {"chat_id": CHANNEL_ID, "photo": photo, "caption": text, "parse_mode": "HTML"}
+        data = {"chat_id": chat_id, "photo": photo, "caption": text, "parse_mode": "HTML"}
         if markup:
             data["reply_markup"] = markup
         try:
             r = requests.post(f"https://telegram.org{BOT_TOKEN}/sendPhoto", data=data, timeout=20)
+            print("sendPhoto:", r.status_code, r.text)
             if r.status_code == 200:
                 return True
-        except Exception:
-            pass
+        except Exception as e:
+            print("sendPhoto err:", e)
 
-    data = {"chat_id": CHANNEL_ID, "text": text, "parse_mode": "HTML"}
+    data = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
     if markup:
         data["reply_markup"] = markup
     r = requests.post(f"https://telegram.org{BOT_TOKEN}/sendMessage", data=data, timeout=20)
-    print("Telegram javob:", r.status_code, r.text)
+    print("sendMessage:", r.status_code, r.text)
     return r.status_code == 200
 
-def fetch_games():
-    deals = []
-
-    # 1. Epic Games Store (nomi, rasmi, tavsifi, narxi bilan)
+def reply_bot_users():
+    # Botga shaxsiy chatda /start yozganlarga javob berish
     try:
-        epic_api = "https://epicgames.com"
-        proxy_url = f"https://allorigins.win{requests.utils.quote(epic_api)}"
-        r = requests.get(proxy_url, timeout=25)
-        if r.status_code == 200 and r.text.strip().startswith("{"):
-            elements = r.json()["data"]["Catalog"]["searchStore"]["elements"]
-            for el in elements:
-                price = (el.get("price") or {}).get("totalPrice") or {}
-                orig = price.get("originalPrice") or 0
-                disc = price.get("discountPrice")
-                if orig > 0 and disc == 0:
-                    slug = el.get("productSlug") or el.get("urlSlug") or ""
-                    for m in (el.get("catalogNs") or {}).get("mappings") or []:
-                        if m.get("pageSlug"):
-                            slug = m["pageSlug"]
-                            break
-                    slug = slug.split("/")
-                    image = ""
-                    for img in el.get("keyImages") or []:
-                        if img.get("type") in ("OfferImageWide", "DieselStoreFrontWide", "Thumbnail"):
-                            image = img.get("url", "")
-                            break
-                    desc = (el.get("description") or "").strip()
-                    if len(desc) > 180:
-                        desc = desc[:177] + "..."
+        r = requests.get(f"https://telegram.org{BOT_TOKEN}/getUpdates", timeout=15).json()
+        for upd in r.get("result", []):
+            msg = upd.get("message") or {}
+            cid = msg.get("chat", {}).get("id")
+            if cid:
+                send_tg(cid, "👋 <b>Salom! FreeGame Pulse bot faol!</b>\nBarcha bepul o'yinlar va chegirmalar 👉 @gametraverse kanaliga yuborilmoqda.")
+                requests.get(f"https://telegram.org{BOT_TOKEN}/getUpdates?offset={upd['update_id'] + 1}", timeout=10)
+    except Exception as e:
+        print("getUpdates err:", e)
 
+def get_rates():
+    try:
+        r = requests.get("https://er-api.com", timeout=15).json()
+        uzs = float(r["rates"]["UZS"])
+        rub = float(r["rates"]["RUB"])
+        return uzs, uzs / rub
+    except Exception:
+        return 12800.0, 135.0
+
+def fetch_deals():
+    # GitHub serverlaridan bloklanmaydigan ochiq o'yin chegirmalari feedi (Steam/Epic)
+    deals = []
+    # 1. SteamSpy TOP chegirmalar API (Cloudflare'siz, har doim ochiq)
+    try:
+        r = requests.get("https://steamspy.com", timeout=20)
+        print("SteamSpy status:", r.status_code)
+        if r.status_code == 200 and r.text.strip().startswith("{"):
+            data = r.json()
+            for appid, info in data.items():
+                disc = int(info.get("discount") or 0)
+                price_cents = int(info.get("price") or 0)
+                init_cents = int(info.get("initialprice") or 0)
+                if init_cents > 0 and (price_cents == 0 or disc >= 50):
                     deals.append({
-                        "id": f"epic_{el['id']}",
-                        "title": el.get("title", "Epic Game"),
-                        "desc": desc,
-                        "store": "Epic Games Store",
-                        "orig": orig / 100.0,
-                        "final": 0.0,
-                        "disc": 100,
-                        "image": image,
-                        "link": f"https://epicgames.com{slug}" if slug else "https://epicgames.com"
+                        "id": f"spy_{appid}_{disc}",
+                        "title": info.get("name", "Steam Game"),
+                        "desc": f"Janr/Tegs: {', '.join(list((info.get('tags') or {}).keys())[:4])}",
+                        "store": "Steam",
+                        "orig": init_cents / 100.0,
+                        "final": price_cents / 100.0,
+                        "disc": disc if disc > 0 else 100,
+                        "image": f"https://steamstatic.com{appid}/header.jpg",
+                        "link": f"https://steampowered.com{appid}"
                     })
     except Exception as e:
-        print("Epic xato:", e)
-
-    # 2. Steam, GOG, Epic chegirmalari (CheapShark orqali)
-    try:
-        cs_api = "https://cheapshark.com"
-        proxy_cs = f"https://allorigins.win{requests.utils.quote(cs_api)}"
-        r = requests.get(proxy_cs, timeout=25)
-        if r.status_code == 200 and r.text.strip().startswith("["):
-            stores = {"1": "Steam", "7": "GOG", "25": "Epic Games Store"}
-            for d in r.json():
-                steam_id = d.get("steamAppID")
-                rating = d.get("steamRatingText") or ""
-                rating_pct = d.get("steamRatingPercent") or ""
-                desc = f"Steam reytingi: {rating} ({rating_pct}% ijobiy baho)" if rating else ""
-
-                deals.append({
-                    "id": f"cs_{d['dealID']}",
-                    "title": d.get("title", "Game"),
-                    "desc": desc,
-                    "store": stores.get(str(d.get("storeID")), "PC Store"),
-                    "orig": float(d.get("normalPrice", 0)),
-                    "final": float(d.get("salePrice", 0)),
-                    "disc": int(round(float(d.get("savings", 0)))),
-                    "image": f"https://steamstatic.com{steam_id}/header.jpg" if steam_id else d.get("thumb", ""),
-                    "link": f"https://cheapshark.com{d['dealID']}"
-                })
-    except Exception as e:
-        print("CheapShark xato:", e)
-
+        print("SteamSpy xato:", e)
     return deals
 
 def main():
     if not BOT_TOKEN:
-        print("XATO: BOT_TOKEN yo'q!")
+        print("XATO: BOT_TOKEN topilmadi!")
         return
 
+    reply_bot_users()
     usd_uzs, rub_uzs = get_rates()
     sent_ids = load_sent()
-    deals = fetch_games()
-    print("Topilgan o'yinlar:", len(deals))
+    deals = fetch_deals()
+    print("Topilgan chegirmalar:", len(deals))
+
+    if not deals:
+        send_tg(CHANNEL_ID, "✅ <b>PULSE bot @gametraverse kanaliga muvaffaqiyatli ulandi!</b>\nTez orada yangi chegirmalar va bepul o'yinlar chiqadi.")
+        return
 
     updated = False
     count = 0
@@ -159,7 +131,7 @@ def main():
                 f"✅ <b>Yangi narxi:</b> {price_line}\n"
                 f"⏳ <b>Muddat:</b> Cheklangan vaqt"
             )
-            if send_tg(msg, d["image"], d["link"]):
+            if send_tg(CHANNEL_ID, msg, d["image"], d["link"]):
                 sent_ids.append(d["id"])
                 updated = True
                 count += 1
