@@ -202,7 +202,7 @@ def on_msg(cid, txt, st):
 
 def poll():
     st = load_state()
-        elif txt in (UI["uz"]["rates"], UI["ru"]["rates"], UI["en"]["rates"]):
+    elif txt in (UI["uz"]["rates"], UI["ru"]["rates"], UI["en"]["rates"]):
         u, r = get_rates()
         send(cid, UI[l]["r_msg"].format(usd=f"{int(round(u)):,}".replace(",", " "), rub=f"{r:.1f}"), main_kb(l))
 
