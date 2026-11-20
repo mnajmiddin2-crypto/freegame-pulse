@@ -5,10 +5,10 @@ import html
 import requests
 
 RAW_TOKEN = (os.environ.get("BOT_TOKEN") or "").strip()
-# Agar token URL ko'rinishida kiritilgan bo'lsa, faqat haqiqiy token qismini ajratib olamiz
 m = re.search(r"(\d+:[A-Za-z0-9_-]+)", RAW_TOKEN)
 BOT_TOKEN = m.group(1) if m else RAW_TOKEN
 
+TG_URL = f"https://telegram.org{BOT_TOKEN}"
 CHANNEL_ID = "@gametraverse"
 DB_FILE = "sent_games.json"
 
@@ -32,7 +32,7 @@ def send_tg(chat_id, text, photo=None, url=None):
         if markup:
             data["reply_markup"] = markup
         try:
-            r = requests.post(f"https://telegram.org{BOT_TOKEN}/sendPhoto", data=data, timeout=20)
+            r = requests.post(f"{TG_URL}/sendPhoto", data=data, timeout=20)
             if r.status_code == 200:
                 return True
         except Exception as e:
@@ -41,19 +41,19 @@ def send_tg(chat_id, text, photo=None, url=None):
     data = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
     if markup:
         data["reply_markup"] = markup
-    r = requests.post(f"https://telegram.org{BOT_TOKEN}/sendMessage", data=data, timeout=20)
+    r = requests.post(f"{TG_URL}/sendMessage", data=data, timeout=20)
     print("Telegram javob:", r.status_code, r.text)
     return r.status_code == 200
 
 def reply_bot_users():
     try:
-        r = requests.get(f"https://telegram.org{BOT_TOKEN}/getUpdates", timeout=15).json()
+        r = requests.get(f"{TG_URL}/getUpdates", timeout=15).json()
         for upd in r.get("result", []):
             msg = upd.get("message") or {}
             cid = msg.get("chat", {}).get("id")
             if cid:
                 send_tg(cid, "👋 <b>Salom! FreeGame Pulse bot faol!</b>\nBarcha bepul o'yinlar va chegirmalar 👉 @gametraverse kanaliga yuborilmoqda.")
-                requests.get(f"https://telegram.org{BOT_TOKEN}/getUpdates?offset={upd['update_id'] + 1}", timeout=10)
+                requests.get(f"{TG_URL}/getUpdates?offset={upd['update_id'] + 1}", timeout=10)
     except Exception as e:
         print("getUpdates err:", e)
 
@@ -68,7 +68,6 @@ def get_rates():
 
 def fetch_deals():
     deals = []
-    # SteamSpy TOP chegirmalar va bepul o'yinlar
     try:
         r = requests.get("https://steamspy.com", timeout=20)
         if r.status_code == 200 and r.text.strip().startswith("{"):
