@@ -226,3 +226,47 @@ def bot_polling():
                     elif text in (UI["uz"]["btn_epic_free"], UI["ru"]["btn_epic_free"], UI["en"]["btn_epic_free"]):
                         send_msg(cid, UI[lang]["loading"])
                         games = get_games_list("epic", only_free=True)
+send_msg(cid, format_list_message(games, UI[lang]["btn_epic_free"], lang), get_main_keyboard(lang))
+elif text in (UI["uz"]["btn_rates"], UI["ru"]["btn_rates"], UI["en"]["btn_rates"]):
+usd, rub = get_rates()
+usd_s = f"{int(round(usd)):,}".replace(",", " ")
+rub_s = f"{rub:.1f}"
+send_msg(cid, UI[lang]["rates_msg"].format(usd=usd_s, rub=rub_s), get_main_keyboard(lang))
+elif "callback_query" in upd:
+cb = upd["callback_query"]
+cid = str(cb["message"]["chat"]["id"])
+data = cb.get("data", "")
+if data.startswith("setlang:"):
+chosen = data.split(":")
+state["users"][cid] = chosen
+save_state(state)
+requests.post(f"{TG_URL}/answerCallbackQuery", data={"callback_query_id": cb["id"]}, timeout=10)
+send_msg(cid, UI[chosen]["menu_title"], get_main_keyboard(chosen))
+except Exception as e:
+print("Polling xatosi:", e)
+time.sleep(3)
+
+--------------------------------------------------------- Avtomatik eslatma (har 3 soatda)
+
+def auto_notifier():
+while True:
+time.sleep(10800)  # 3 soat
+state = load_state()
+free_games = get_games_list("steam", True) + get_games_list("epic", True)
+for g in free_games:
+if g["id"] not in state["sent"]:
+state["sent"].append(g["id"])
+state["sent"] = state["sent"][-200:]
+save_state(state)
+alert = f"🚨 YANGI TEKIN O'YIN ESLATMASI!\n\n🎮 <a href='{g['link']}'>{html.escape(g['title'])}\n💰 0$ / 0 so'm / 0 ₽ (100% BEPUL)"
+send_msg(CHANNEL_ID, alert)
+for uid in list(state["users"].keys()):
+send_msg(uid, alert)
+@app.route("/")
+def home():
+return "FreeGame Pulse 24/7 Bot is running!"
+if name == "main":
+threading.Thread(target=bot_polling, daemon=True).start()
+threading.Thread(target=auto_notifier, daemon=True).start()
+port = int(os.environ.get("PORT", 10000))
+app.run(host="0.0.0.0", port=port)
