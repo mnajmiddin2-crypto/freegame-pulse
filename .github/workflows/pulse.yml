@@ -1,1 +1,334 @@
+#!/usr/bin/env python3
+"""FreeGame Pulse: Epic Games Store va Steam'dagi 100% bepul o'yinlarni
+@gametraverse kanaliga va bot foydalanuvchilariga yuboradi."""
 
+import html
+import json
+import os
+import sys
+import time
+from datetime import datetime, timedelta, timezone
+
+import requests
+
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+CHANNEL = os.environ.get("CHANNEL", "@gametraverse")
+API = f"https://api.telegram.org/bot{BOT_TOKEN}"
+
+SENT_FILE = "sent_games.json"
+STATE_FILE = "state.json"
+HEADERS = {"User-Agent": "Mozilla/5.0 (FreeGamePulse; +https://github.com)"}
+TZ = timezone(timedelta(hours=5))  # Toshkent vaqti (UTC+5)
+
+MONTHS_UZ = ["yanvar", "fevral", "mart", "aprel", "may", "iyun",
+             "iyul", "avgust", "sentabr", "oktabr", "noyabr", "dekabr"]
+
+# ---------------------------------------------------------------- matnlar
+TEXTS = {
+    "uz": {
+        "title": "🎁 <b>BEPUL O'YIN!</b>",
+        "store": "Do'kon",
+        "price": "Narxi",
+        "until": "Muddat",
+        "button": "🎮 Bepul olish",
+        "unknown": "noma'lum",
+        "welcome": "Salom! Tilni tanlang 👇",
+        "saved": "✅ Tayyor! Yangi bepul o'yinlar chiqsa, sizga xabar beraman.\n"
+                 "Bekor qilish: /stop, tilni o'zgartirish: /lang",
+        "stopped": "🔕 Bildirishnomalar o'chirildi. Qayta yoqish: /start",
+    },
+    "ru": {
+        "title": "🎁 <b>БЕСПЛАТНАЯ ИГРА!</b>",
+        "store": "Магазин",
+        "price": "Цена",
+        "until": "Раздача до",
+        "button": "🎮 Забрать бесплатно",
+        "unknown": "неизвестно",
+        "welcome": "Привет! Выберите язык 👇",
+        "saved": "✅ Готово! Я сообщу, когда появятся новые бесплатные игры.\n"
+                 "Отписаться: /stop, сменить язык: /lang",
+        "stopped": "🔕 Уведомления отключены. Включить снова: /start",
+    },
+    "en": {
+        "title": "🎁 <b>FREE GAME!</b>",
+        "store": "Store",
+        "price": "Price",
+        "until": "Free until",
+        "button": "🎮 Get it free",
+        "unknown": "unknown",
+        "welcome": "Hi! Choose your language 👇",
+        "saved": "✅ Done! I'll notify you when new free games appear.\n"
+                 "Unsubscribe: /stop, change language: /lang",
+        "stopped": "🔕 Notifications turned off. Turn on again: /start",
+    },
+}
+
+
+# ---------------------------------------------------------------- yordamchi
+def load_json(path, default):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return default
+
+
+def save_json(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def get_json(url, params=None):
+    r = requests.get(url, params=params, headers=HEADERS, timeout=30)
+    r.raise_for_status()
+    return r.json()
+
+
+def tg(method, **payload):
+    try:
+        r = requests.post(f"{API}/{method}", json=payload, timeout=30)
+        return r.json()
+    except Exception as e:  # tarmoq xatosi
+        return {"ok": False, "description": str(e)}
+
+
+def parse_iso(s):
+    return datetime.fromisoformat(s.replace("Z", "+00:00"))
+
+
+def fmt_date(dt, lang):
+    if dt is None:
+        return TEXTS[lang]["unknown"]
+    dt = dt.astimezone(TZ)
+    if lang == "uz":
+        month = MONTHS_UZ[dt.month - 1]
+        return f"{dt.day}-{month} {dt:%H:%M} (UTC+5)"
+    return f"{dt:%d.%m.%Y %H:%M} (UTC+5)"
+
+
+# ---------------------------------------------------------------- Epic
+def fetch_epic():
+    url = "https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions"
+    params = {"locale": "en-US", "country": "US", "allowCountries": "US"}
+    data = get_json(url, params)
+    elements = data["data"]["Catalog"]["searchStore"]["elements"]
+    now = datetime.now(timezone.utc)
+    games = []
+
+    for el in elements:
+        promos = el.get("promotions") or {}
+        end = None
+        active = False
+        for block in promos.get("promotionalOffers") or []:
+            for offer in block.get("promotionalOffers") or []:
+                start_d = parse_iso(offer["startDate"])
+                end_d = parse_iso(offer["endDate"])
+                if start_d <= now <= end_d:
+                    active = True
+                    end = end_d
+        if not active:
+            continue
+
+        price = (el.get("price") or {}).get("totalPrice") or {}
+        original = price.get("originalPrice") or 0
+        if price.get("discountPrice") != 0 or original <= 0:
+            continue  # 100% chegirma emas
+
+        slug = el.get("productSlug") or ""
+        if not slug:
+            for m in el.get("offerMappings") or []:
+                if m.get("pageSlug"):
+                    slug = m["pageSlug"]
+                    break
+        if not slug:
+            for m in (el.get("catalogNs") or {}).get("mappings") or []:
+                if m.get("pageSlug"):
+                    slug = m["pageSlug"]
+                    break
+        if not slug:
+            slug = el.get("urlSlug") or ""
+        slug = slug.split("/")[0]
+        link = (f"https://store.epicgames.com/en-US/p/{slug}" if slug
+                else "https://store.epicgames.com/en-US/free-games")
+
+        image = None
+        images = {i.get("type"): i.get("url") for i in el.get("keyImages") or []}
+        for t in ("OfferImageWide", "DieselStoreFrontWide", "Thumbnail", "OfferImageTall"):
+            if images.get(t):
+                image = images[t]
+                break
+
+        games.append({
+            "key": f"epic:{el['id']}",
+            "store": "Epic Games Store",
+            "title": el.get("title", "Unknown"),
+            "link": link,
+            "image": image,
+            "original": f"${original / 100:.2f}",
+            "end": end,
+        })
+    return games
+
+
+# ---------------------------------------------------------------- Steam
+def fetch_steam():
+    data = get_json("https://store.steampowered.com/api/featuredcategories/",
+                    {"cc": "us", "l": "english"})
+    items = (data.get("specials") or {}).get("items") or []
+    games = []
+    seen = set()
+
+    for it in items:
+        if it.get("discount_percent") != 100 or it.get("final_price") != 0:
+            continue
+        if (it.get("original_price") or 0) <= 0:
+            continue
+        appid = it["id"]
+        if appid in seen:
+            continue
+        seen.add(appid)
+
+        # faqat o'yinlar (DLC, soundtrack va h.k. emas)
+        try:
+            det = get_json("https://store.steampowered.com/api/appdetails",
+                           {"appids": appid, "cc": "us", "l": "english"})
+            info = det[str(appid)]
+            if info.get("success") and info["data"].get("type") != "game":
+                continue
+        except Exception as e:
+            print(f"appdetails xato ({appid}): {e}")
+
+        exp = it.get("discount_expiration")
+        games.append({
+            "key": f"steam:{appid}",
+            "store": "Steam",
+            "title": it.get("name", "Unknown"),
+            "link": f"https://store.steampowered.com/app/{appid}",
+            "image": it.get("large_capsule_image") or it.get("header_image"),
+            "original": f"${it['original_price'] / 100:.2f}",
+            "end": datetime.fromtimestamp(exp, timezone.utc) if exp else None,
+        })
+        time.sleep(0.3)
+    return games
+
+
+# ---------------------------------------------------------------- yuborish
+def build_caption(game, lang):
+    t = TEXTS[lang]
+    return (
+        f"{t['title']}\n\n"
+        f"🎮 <b>{html.escape(game['title'])}</b>\n"
+        f"🏪 {t['store']}: {game['store']}\n"
+        f"💰 {t['price']}: <s>{game['original']}</s> → <b>0$</b>\n"
+        f"⏰ {t['until']}: {fmt_date(game['end'], lang)}"
+    )
+
+
+def send_game(chat_id, game, lang):
+    caption = build_caption(game, lang)
+    markup = {"inline_keyboard": [[{"text": TEXTS[lang]["button"], "url": game["link"]}]]}
+    res = {"ok": False}
+    if game["image"]:
+        res = tg("sendPhoto", chat_id=chat_id, photo=game["image"], caption=caption,
+                 parse_mode="HTML", reply_markup=markup)
+    if not res.get("ok"):
+        if res.get("error_code") in (403, 400) and "chat not found" in str(res.get("description", "")):
+            return res
+        res = tg("sendMessage", chat_id=chat_id, text=caption, parse_mode="HTML",
+                 reply_markup=markup, link_preview_options={"is_disabled": True})
+    return res
+
+
+# ---------------------------------------------------------------- foydalanuvchilar
+def lang_keyboard():
+    return {"inline_keyboard": [[
+        {"text": "🇺🇿 O'zbekcha", "callback_data": "lang:uz"},
+        {"text": "🇷🇺 Русский", "callback_data": "lang:ru"},
+        {"text": "🇬🇧 English", "callback_data": "lang:en"},
+    ]]}
+
+
+def process_updates(state):
+    tg("deleteWebhook")  # getUpdates ishlashi uchun webhook bo'lmasligi kerak
+    res = tg("getUpdates", offset=state["offset"], timeout=0,
+             allowed_updates=["message", "callback_query"])
+    if not res.get("ok"):
+        print("getUpdates xato:", res)
+        return
+    users = state["users"]
+
+    for u in res.get("result", []):
+        state["offset"] = u["update_id"] + 1
+
+        if "message" in u:
+            m = u["message"]
+            if m["chat"].get("type") != "private":
+                continue
+            cid = str(m["chat"]["id"])
+            text = (m.get("text") or "").strip().lower()
+            if text.startswith("/start") or text.startswith("/lang"):
+                tg("sendMessage", chat_id=cid,
+                   text="🇺🇿 Tilni tanlang · 🇷🇺 Выберите язык · 🇬🇧 Choose language",
+                   reply_markup=lang_keyboard())
+            elif text.startswith("/stop"):
+                lang = users.pop(cid, "uz")
+                tg("sendMessage", chat_id=cid, text=TEXTS[lang]["stopped"])
+
+        elif "callback_query" in u:
+            cq = u["callback_query"]
+            data = cq.get("data", "")
+            if data.startswith("lang:") and data[5:] in TEXTS:
+                lang = data[5:]
+                cid = str(cq["message"]["chat"]["id"])
+                users[cid] = lang
+                tg("answerCallbackQuery", callback_query_id=cq["id"])
+                tg("sendMessage", chat_id=cid, text=TEXTS[lang]["saved"])
+
+
+# ---------------------------------------------------------------- asosiy
+def main():
+    sent = load_json(SENT_FILE, [])
+    state = load_json(STATE_FILE, {"offset": 0, "users": {}})
+    state.setdefault("offset", 0)
+    state.setdefault("users", {})
+
+    process_updates(state)
+
+    games, failed = [], 0
+    for name, fn in (("Epic", fetch_epic), ("Steam", fetch_steam)):
+        try:
+            found = fn()
+            print(f"{name}: {len(found)} ta bepul o'yin topildi")
+            games += found
+        except Exception as e:
+            failed += 1
+            print(f"{name} xato: {e}")
+
+    new_games = [g for g in games if g["key"] not in sent]
+    print(f"Yangi: {len(new_games)}")
+
+    for g in new_games:
+        res = send_game(CHANNEL, g, "uz")
+        if not res.get("ok"):
+            print(f"Kanalga yuborilmadi ({g['title']}): {res}")
+            continue
+        sent.append(g["key"])
+        print(f"Kanalga yuborildi: {g['title']}")
+        time.sleep(1)
+
+        for cid, lang in list(state["users"].items()):
+            r = send_game(cid, g, lang)
+            if not r.get("ok") and r.get("error_code") == 403:
+                state["users"].pop(cid, None)  # foydalanuvchi botni bloklagan
+            time.sleep(0.05)
+
+    sent = sent[-1000:]
+    save_json(SENT_FILE, sent)
+    save_json(STATE_FILE, state)
+
+    if failed == 2:
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
