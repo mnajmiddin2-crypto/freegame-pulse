@@ -5,7 +5,7 @@ from flask import Flask
 RAW_TOKEN = (os.environ.get("BOT_TOKEN") or "").strip()
 m = re.search(r"(\d+:[A-Za-z0-9_-]{20,})", RAW_TOKEN)
 BOT_TOKEN = m.group(1) if m else RAW_TOKEN
-TG_URL = "https://" + "api." + "telegram.org/bot" + BOT_TOKEN
+TG_URL = "https://telegram.org" + BOT_TOKEN
 CHANNEL_ID = "@gametraverse"
 STATE_FILE = "bot_users.json"
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36"}
@@ -50,13 +50,15 @@ def main_kb(lang):
 def load_state():
     if os.path.exists(STATE_FILE):
         try:
-            return json.load(open(STATE_FILE, "r", encoding="utf-8"))
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
         except Exception:
             pass
     return {"users": {}, "sent": []}
 
 def save_state(st):
-    json.dump(st, open(STATE_FILE, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(st, f, ensure_ascii=False, indent=2)
 
 def get_rates():
     try:
@@ -76,14 +78,17 @@ def get_steam_games(free_only):
         seen = set()
         for it in items:
             appid = it.get("id")
-            if not appid or appid in seen: continue
+            if not appid or appid in seen:
+                continue
             seen.add(appid)
             disc = int(it.get("discount_percent") or 0)
             final_c = int(it.get("final_price") or 0)
             orig_c = int(it.get("original_price") or 0)
-            if orig_c <= 0: continue
+            if orig_c <= 0:
+                continue
             isf = (final_c == 0 or disc == 100)
-            if free_only != isf: continue
+            if free_only != isf:
+                continue
             exp = it.get("discount_expiration")
             end_s = datetime.fromtimestamp(exp, timezone.utc).strftime("%d.%m.%Y") if exp else ""
             res.append({
@@ -96,7 +101,8 @@ def get_steam_games(free_only):
                 "end": end_s,
                 "link": f"https://steampowered.com{appid}"
             })
-            if len(res) >= 10: break
+            if len(res) >= 10:
+                break
     except Exception as e:
         print("Steam err:", e)
     return res
@@ -113,7 +119,8 @@ def get_epic_games(free_only):
             price = (el.get("price") or {}).get("totalPrice") or {}
             orig_c = int(price.get("originalPrice") or 0)
             final_c = int(price.get("discountPrice") or 0)
-            if orig_c <= 0 or final_c >= orig_c: continue
+            if orig_c <= 0 or final_c >= orig_c:
+                continue
 
             promos = el.get("promotions") or {}
             active = False
@@ -125,10 +132,12 @@ def get_epic_games(free_only):
                     if sd <= now <= ed:
                         active = True
                         end_s = ed.strftime("%d.%m.%Y")
-            if not active and final_c == 0: continue
+            if not active and final_c == 0:
+                continue
 
             isf = (final_c == 0)
-            if free_only != isf: continue
+            if free_only != isf:
+                continue
 
             disc = int(round((1 - (final_c / orig_c)) * 100))
             slug = el.get("productSlug") or el.get("urlSlug") or ""
@@ -136,7 +145,7 @@ def get_epic_games(free_only):
                 if m_item.get("pageSlug"):
                     slug = m_item["pageSlug"]
                     break
-            slug = slug.split("/")
+            slug = slug.split("/")[0]
             link = f"https://epicgames.com{slug}" if slug else "https://epicgames.com"
 
             res.append({
@@ -149,17 +158,18 @@ def get_epic_games(free_only):
                 "end": end_s,
                 "link": link
             })
-            if len(res) >= 10: break
+            if len(res) >= 10:
+                break
     except Exception as e:
         print("Epic err:", e)
     return res
 
 def fmt_games(games, hdr, lang):
-    if not games: return UI[lang]["empty"]
+    if not games:
+        return UI[lang]["empty"]
     uzs_r, rub_r = get_rates()
     out = [f"<b>{hdr}</b>\n"]
     for i, g in enumerate(games, 1):
-        uzs_old = f"{int(round(g['orig'] * uzs_r, -2)):,}".replace(",", " ")
         if g["free"]:
             pt = f"🎁 <s>${g['orig']:.2f}</s> ➡️ <b>0$ / 0 so'm / 0 ₽ (TEKIN)</b>"
         else:
@@ -172,7 +182,8 @@ def fmt_games(games, hdr, lang):
 
 def send(cid, txt, kb=None):
     d = {"chat_id": cid, "text": txt, "parse_mode": "HTML", "disable_web_page_preview": True}
-    if kb: d["reply_markup"] = kb
+    if kb:
+        d["reply_markup"] = kb
     requests.post(f"{TG_URL}/sendMessage", data=d, timeout=15)
 
 def on_msg(cid, txt, st):
@@ -207,31 +218,3 @@ def poll():
                     on_msg(str(u["message"]["chat"]["id"]), (u["message"].get("text") or "").strip(), st)
                 elif "callback_query" in u:
                     cb = u["callback_query"]
-                    cid = str(cb["message"]["chat"]["id"])
-if cb.get("data", "").startswith("setlang:"):
-ch = cb["data"].split(":")
-st["users"][cid] = ch
-save_state(st)
-requests.post(f"{TG_URL}/answerCallbackQuery", data={"callback_query_id": cb["id"]}, timeout=10)
-send(cid, UI[ch]["menu"], main_kb(ch))
-except Exception as e:
-print("Err:", e)
-time.sleep(3)
-def notify():
-while True:
-time.sleep(10800)
-st = load_state()
-for g in get_steam_games(True) + get_epic_games(True):
-if g["id"] not in st["sent"]:
-st["sent"] = (st["sent"] + [g["id"]])[-200:]
-save_state(st)
-al = f"🚨 YANGI TEKIN O'YIN!\n\n🎮 <a href='{g['link']}'>{html.escape(g['title'])}\n💰 ${g['orig']:.2f} ➡️ 0$ / 0 so'm / 0 ₽ (TEKIN)"
-send(CHANNEL_ID, al)
-for uid in list(st["users"].keys()): send(uid, al)
-@app.route("/")
-def home():
-return "OK"
-if name == "main":
-threading.Thread(target=poll, daemon=True).start()
-threading.Thread(target=notify, daemon=True).start()
-app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
