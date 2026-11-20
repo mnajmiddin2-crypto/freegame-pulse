@@ -212,12 +212,7 @@ def poll():
     while True:
         try:
             r = requests.get(f"{TG_URL}/getUpdates", params={"offset": off, "timeout": 25}, timeout=30).json()
-            for u in r.get("result", []):
-                off = u["update_id"] + 1
-                if "message" in u:
-                    on_msg(str(u["message"]["chat"]["id"]), (u["message"].get("text") or "").strip(), st)
-                elif "callback_query" in u:
-                  def poll():
+           def poll():
     st = load_state()
     off = 0
     while True:
@@ -239,7 +234,6 @@ def poll():
         except Exception as e:
             print("Err:", e)
             time.sleep(3)
-
 def notify():
     while True:
         time.sleep(10800)
@@ -252,13 +246,10 @@ def notify():
                 send(CHANNEL_ID, al)
                 for uid in list(st["users"].keys()):
                     send(uid, al)
-
 @app.route("/")
 def home():
     return "OK"
-
 if __name__ == "__main__":
     threading.Thread(target=poll, daemon=True).start()
     threading.Thread(target=notify, daemon=True).start()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
-
