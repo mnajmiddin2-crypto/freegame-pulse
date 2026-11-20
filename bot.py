@@ -19,7 +19,6 @@ STATE_FILE = "bot_users.json"
 
 app = Flask(__name__)
 
-# --------------------------------------------------------- 3 tilli matnlar va menyu
 UI = {
     "uz": {
         "menu_title": "🎮 <b>Asosiy menyu:</b> Kerakli bo'limni tanlang 👇",
@@ -81,7 +80,6 @@ LANG_INLINE = json.dumps({
     ]]
 })
 
-# --------------------------------------------------------- Ma'lumotlar bazasi
 def load_state():
     if os.path.exists(STATE_FILE):
         try:
@@ -105,7 +103,6 @@ def get_rates():
     except Exception:
         return 12800.0, 135.0
 
-# --------------------------------------------------------- O'yinlarni yig'ish
 def get_games_list(store_filter, only_free):
     results = []
     headers = {"User-Agent": "python:freegame-pulse-live:v1.0 (by /u/gametraverse)"}
@@ -189,7 +186,6 @@ def send_msg(chat_id, text, reply_markup=None):
         data["reply_markup"] = reply_markup
     requests.post(f"{TG_URL}/sendMessage", data=data, timeout=15)
 
-# --------------------------------------------------------- 1 soniyada javob beruvchi Polling
 def bot_polling():
     state = load_state()
     offset = 0
@@ -226,10 +222,11 @@ def bot_polling():
                     elif text in (UI["uz"]["btn_epic_free"], UI["ru"]["btn_epic_free"], UI["en"]["btn_epic_free"]):
                         send_msg(cid, UI[lang]["loading"])
                         games = get_games_list("epic", only_free=True)
-send_msg(cid, format_list_message(games, UI[lang]["btn_epic_free"], lang), get_main_keyboard(lang))
-elif text in (UI["uz"]["btn_rates"], UI["ru"]["btn_rates"], UI["en"]["btn_rates"]):
-usd, rub = get_rates()
-usd_s = f"{int(round(usd)):,}".replace(",", " ")
+                        send_msg(cid, format_list_message(games, UI[lang]["btn_epic_free"], lang), get_main_keyboard(lang))
+
+                    elif text in (UI["uz"]["btn_rates"], UI["ru"]["btn_rates"], UI["en"]["btn_rates"]):
+                        usd, rub = get_rates()
+                        usd_s = f"{int(round(usd)):,}".replace(",", " ")
 rub_s = f"{rub:.1f}"
 send_msg(cid, UI[lang]["rates_msg"].format(usd=usd_s, rub=rub_s), get_main_keyboard(lang))
 elif "callback_query" in upd:
@@ -245,12 +242,9 @@ send_msg(cid, UI[chosen]["menu_title"], get_main_keyboard(chosen))
 except Exception as e:
 print("Polling xatosi:", e)
 time.sleep(3)
-
---------------------------------------------------------- Avtomatik eslatma (har 3 soatda)
-
 def auto_notifier():
 while True:
-time.sleep(10800)  # 3 soat
+time.sleep(10800)
 state = load_state()
 free_games = get_games_list("steam", True) + get_games_list("epic", True)
 for g in free_games:
