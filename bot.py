@@ -213,5 +213,9 @@ def poll():
                 elif "callback_query" in u:
                     cb = u["callback_query"]
                     cid = str(cb["message"]["chat"]["id"])
-                    if cb.get("data", "").startswith("setlang:"):
-                        ch = cb["data"].split(":")[1]
+                        if cb.get("data", "").startswith("setlang:"):
+                            ch = cb["data"].split(":")[1]
+            • st["users"][cid] = ch
+            • save_state(st)
+            • requests.post(f"{TG_URL}/answerCallbackQuery", data={"callback_query_id": cb["id"]}, timeout=10)
+            • send(cid, UI[ch]["menu"], main_kb(ch))
