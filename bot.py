@@ -245,11 +245,10 @@ def poll_loop():
                     data = cb.get("data", "")
                     if data.startswith("setlang:"):
                      lang = data.split(":") [1]
-
-                        st["users"][cid] = lang
-                        save_state(st)
-                        requests.post(f"{TG_URL}/answerCallbackQuery", data={"callback_query_id": cb["id"]})
-                        send(cid, UI[lang]["menu"], main_kb(lang))
+                     st["users"][cid] = lang
+                     save_state(st)
+                     requests.post(f"{TG_URL}/answerCallbackQuery", data={"callback_query_id": cb["id"]})
+                     send(cid, UI[lang]["menu"], main_kb(lang))
         except Exception as e:
             print("Poll err:", e, flush=True)
             time.sleep(5)
