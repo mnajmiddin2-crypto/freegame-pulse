@@ -5,7 +5,7 @@ from flask import Flask
 RAW_TOKEN = (os.environ.get("BOT_TOKEN") or "").strip()
 m = re.search(r"(\d+:[A-Za-z0-9_-]{20,})", RAW_TOKEN)
 BOT_TOKEN = m.group(1) if m else RAW_TOKEN
-TG_URL = "https://telegram.org" + BOT_TOKEN
+TG_URL = "https://api." + "telegram.org/bot" + BOT_TOKEN
 CHANNEL_ID = "@gametraverse"
 STATE_FILE = "bot_users.json"
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36"}
