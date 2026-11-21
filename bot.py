@@ -59,7 +59,7 @@ def save_state(st):
 
 def get_rates():
     try:
-        u = "https://open." + "://er-api.com"
+        u = "".join(["https://", "open.", "er-api.com", "/v6/latest/USD"])
         r = requests.get(u, timeout=10).json()["rates"]
         uzs = float(r["UZS"])
         return uzs, uzs / float(r["RUB"])
@@ -69,7 +69,7 @@ def get_rates():
 def get_steam_games(free_only):
     res = []
     try:
-        u = "https://store." + "://steampowered.com"
+        u = "".join(["https://", "store.", "steampowered.com", "/api/featuredcategories/?cc=us&l=english"])
         r = requests.get(u, headers=HEADERS, timeout=15)
         items = (r.json().get("specials") or {}).get("items") or []
         seen = set()
@@ -96,7 +96,8 @@ def get_steam_games(free_only):
                 "disc": disc if disc > 0 else 100,
                 "free": isf,
                 "end": end_s,
-                "link": "https://store." + f"://steampowered.com{appid}/"
+                "link": "".join(["https://", "store.", "steampowered.com", f"/app/{appid}/"])
+
             })
             if len(res) >= 10:
                 break
@@ -108,7 +109,7 @@ def get_steam_games(free_only):
 def get_epic_games(free_only):
     res = []
     try:
-        u = "https://store-site-backend-static-ipv4.ak." + "://epicgames.com"
+        u = "".join(["https://", "store-site-backend-static-ipv4.ak.", "epicgames.com", "/freeGamesPromotions?locale=en-US&country=US&allowCountries=US"])
         r = requests.get(u, headers=HEADERS, timeout=15)
         elements = r.json()["data"]["Catalog"]["searchStore"]["elements"]
         now = datetime.now(timezone.utc)
@@ -140,7 +141,8 @@ def get_epic_games(free_only):
                     slug = m_item["pageSlug"]
                     break
             slug = slug.split("/")[-1]
-            link = ("https://store." + f"://epicgames.com{slug}") if slug else ("https://store." + "://epicgames.com")
+            link = "".join(["https://", "store.", "epicgames.com", f"/en-US/p/{slug}"]) if slug else "".join(["https://", "store.", "epicgames.com", "/en-US/free-games"])
+
             res.append({
                 "id": f"ep_{el['id']}",
                 "title": el.get("title", "Epic Game"),
