@@ -5,7 +5,7 @@ from flask import Flask
 RAW_TOKEN = (os.environ.get("BOT_TOKEN") or "").strip()
 m = re.search(r"(\d+:[A-Za-z0-9_-]{20,})", RAW_TOKEN)
 BOT_TOKEN = m.group(1) if m else RAW_TOKEN
-TG_URL = "https://" + "api.telegram.org/bot" + BOT_TOKEN
+TG_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 CHANNEL_ID = "@gametraverse"
 STATE_FILE = "bot_users.json"
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36"}
@@ -94,7 +94,7 @@ def get_steam_games(free_only):
                 "disc": disc if disc > 0 else 100,
                 "free": isf,
                 "end": end_s,
-                "link": f"https://steampowered.com{appid}"
+                "link": f"https://steampowered.com{appid}/"
             })
             if len(res) >= 10:
                 break
@@ -174,9 +174,12 @@ def send(cid, txt, kb=None):
     d = {"chat_id": cid, "text": txt, "parse_mode": "HTML", "disable_web_page_preview": True}
     if kb:
         d["reply_markup"] = kb
-    res = requests.post(f"{TG_URL}/sendMessage", data=d, timeout=15).json()
-    if not res.get("ok"):
-        print("Send err:", res, flush=True)
+    try:
+        res = requests.post(f"{TG_URL}/sendMessage", data=d, timeout=15).json()
+        if not res.get("ok"):
+            print("Send err:", res, flush=True)
+    except Exception as e:
+        print("Send req err:", e, flush=True)
 
 def on_msg(cid, txt, st):
     print(f"Xabar keldi: {cid} -> {txt}", flush=True)
@@ -196,24 +199,18 @@ def on_msg(cid, txt, st):
         send(cid, UI[l]["load"])
         send(cid, fmt_games(get_epic_games(True), UI[l]["e_free"], l), main_kb(l))
     elif txt in (UI["uz"]["rates"], UI["ru"]["rates"], UI["en"]["rates"]):
-        u, r = get_rates()
-        send(cid, UI[l]["r_msg"].format(usd=f"{int(round(u)):,}".replace(",", " "), rub=f"{r:.1f}"), main_kb(l))
+        uzs, rub = get_rates()
+        send(cid, UI[l]["r_msg"].format(usd=f"{uzs:,.2f}".replace(",", " "), rub=f"{rub:,.2f}".replace(",", " ")), main_kb(l))
+    else:
+        send(cid, UI[l]["menu"], main_kb(l))
 
-def handle_cb(cb, st):
-    cid = str(cb["message"]["chat"]["id"])
-    data = cb.get("data", "")
-    if data.startswith("setlang:"):
-        ch = data.split(":")[1]
-        st["users"][cid] = ch
-        save_state(st)
-        requests.post(f"{TG_URL}/answerCallbackQuery", data={"callback_query_id": cb["id"]}, timeout=10)
-        send(cid, UI[ch]["menu"], main_kb(ch))
-
-def step(off, st):
-    r = requests.get(f"{TG_URL}/getUpdates", params={"offset": off, "timeout": 25}, timeout=30).json()
-    if not r.get("ok"):
-        print("Telegram API xatosi:", r, flush=True)
-        time.sleep(5)
-        return off
-    for u in r.get("result", []):
-        off = u["update_id"] + 1
+def auto_channel_loop():
+    while True:
+        try:
+            st = load_state()
+            free_games = get_epic_games(True) + get_steam_games(True)
+            changed = False
+            for g in free_games:
+                if g["id"] not in st["sent"]:
+                    msg = fmt_games([g], "🔥 YANGI BEPUL O'YIN!", "uz")
+                    send(CHANNEL_ID, msg)
