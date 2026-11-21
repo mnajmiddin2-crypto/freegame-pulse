@@ -214,3 +214,52 @@ def auto_channel_loop():
                 if g["id"] not in st["sent"]:
                     msg = fmt_games([g], "🔥 YANGI BEPUL O'YIN!", "uz")
                     send(CHANNEL_ID, msg)
+
+                    for uid, ul in st["users"].items():
+                        send(uid, fmt_games([g], "🔥 YANGI BEPUL O'YIN!", ul))
+                    st["sent"].append(g["id"])
+                    changed = True
+            if changed:
+                save_state(st)
+        except Exception as e:
+            print("Auto loop err:", e, flush=True)
+        time.sleep(1800)
+
+def poll_loop():
+    offset = 0
+    while True:
+        try:
+            r = requests.get(f"{TG_URL}/getUpdates", params={"offset": offset, "timeout": 25}, timeout=35).json()
+            for upd in r.get("result", []):
+                offset = upd["update_id"] + 1
+                st = load_state()
+                if "message" in upd and "text" in upd["message"]:
+                    cid = str(upd["message"]["chat"]["id"])
+                    if cid not in st["users"]:
+                        st["users"][cid] = "uz"
+                        save_state(st)
+                    on_msg(cid, upd["message"]["text"], st)
+                elif "callback_query" in upd:
+                    cb = upd["callback_query"]
+                    cid = str(cb["message"]["chat"]["id"])
+                    data = cb.get("data", "")
+                    if data.startswith("setlang:"):
+                     lang = data.split(":") [1]
+
+                        st["users"][cid] = lang
+                        save_state(st)
+                        requests.post(f"{TG_URL}/answerCallbackQuery", data={"callback_query_id": cb["id"]})
+                        send(cid, UI[lang]["menu"], main_kb(lang))
+        except Exception as e:
+            print("Poll err:", e, flush=True)
+            time.sleep(5)
+
+@app.route("/")
+def health():
+    return "FreeGame Pulse is alive!", 200
+
+if __name__ == "__main__":
+    threading.Thread(target=poll_loop, daemon=True).start()
+    threading.Thread(target=auto_channel_loop, daemon=True).start()
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
