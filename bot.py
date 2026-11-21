@@ -96,7 +96,7 @@ def get_steam_games(free_only):
                 "disc": disc if disc > 0 else 100,
                 "free": isf,
                 "end": end_s,
-                "link": f"https://steampowered.com{appid}/"
+                "link": "https://store." + f"://steampowered.com{appid}/"
             })
             if len(res) >= 10:
                 break
@@ -140,7 +140,7 @@ def get_epic_games(free_only):
                     slug = m_item["pageSlug"]
                     break
             slug = slug.split("/")[-1]
-            link = f"https://epicgames.com{slug}" if slug else "https://epicgames.com"
+            link = ("https://store." + f"://epicgames.com{slug}") if slug else ("https://store." + "://epicgames.com")
             res.append({
                 "id": f"ep_{el['id']}",
                 "title": el.get("title", "Epic Game"),
