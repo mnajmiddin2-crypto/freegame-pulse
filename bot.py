@@ -5,7 +5,7 @@ from flask import Flask
 RAW_TOKEN = (os.environ.get("BOT_TOKEN") or "").strip()
 m = re.search(r"(\d+:[A-Za-z0-9_-]{20,})", RAW_TOKEN)
 BOT_TOKEN = m.group(1) if m else RAW_TOKEN
-TG_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
+TG_URL = "https://telegram.org" + BOT_TOKEN
 CHANNEL_ID = "@gametraverse"
 STATE_FILE = "bot_users.json"
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36"}
@@ -59,7 +59,8 @@ def save_state(st):
 
 def get_rates():
     try:
-        r = requests.get("https://er-api.com", timeout=10).json()["rates"]
+        u = "https://open." + "://er-api.com"
+        r = requests.get(u, timeout=10).json()["rates"]
         uzs = float(r["UZS"])
         return uzs, uzs / float(r["RUB"])
     except Exception:
@@ -68,7 +69,8 @@ def get_rates():
 def get_steam_games(free_only):
     res = []
     try:
-        r = requests.get("https://steampowered.com", headers=HEADERS, timeout=15)
+        u = "https://store." + "://steampowered.com"
+        r = requests.get(u, headers=HEADERS, timeout=15)
         items = (r.json().get("specials") or {}).get("items") or []
         seen = set()
         for it in items:
@@ -102,11 +104,12 @@ def get_steam_games(free_only):
         print("Steam err:", e, flush=True)
     return res
 
+
 def get_epic_games(free_only):
     res = []
     try:
-        url = "https://epicgames.com"
-        r = requests.get(url, headers=HEADERS, timeout=15)
+        u = "https://store-site-backend-static-ipv4.ak." + "://epicgames.com"
+        r = requests.get(u, headers=HEADERS, timeout=15)
         elements = r.json()["data"]["Catalog"]["searchStore"]["elements"]
         now = datetime.now(timezone.utc)
         for el in elements:
@@ -214,7 +217,6 @@ def auto_channel_loop():
                 if g["id"] not in st["sent"]:
                     msg = fmt_games([g], "🔥 YANGI BEPUL O'YIN!", "uz")
                     send(CHANNEL_ID, msg)
-
                     for uid, ul in st["users"].items():
                         send(uid, fmt_games([g], "🔥 YANGI BEPUL O'YIN!", ul))
                     st["sent"].append(g["id"])
@@ -244,11 +246,11 @@ def poll_loop():
                     cid = str(cb["message"]["chat"]["id"])
                     data = cb.get("data", "")
                     if data.startswith("setlang:"):
-                     lang = data.split(":") [1]
-                     st["users"][cid] = lang
-                     save_state(st)
-                     requests.post(f"{TG_URL}/answerCallbackQuery", data={"callback_query_id": cb["id"]})
-                     send(cid, UI[lang]["menu"], main_kb(lang))
+                        lang = data.split(":")
+                        st["users"][cid] = lang
+                        save_state(st)
+                        requests.post(f"{TG_URL}/answerCallbackQuery", data={"callback_query_id": cb["id"]})
+                        send(cid, UI[lang]["menu"], main_kb(lang))
         except Exception as e:
             print("Poll err:", e, flush=True)
             time.sleep(5)
