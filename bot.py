@@ -60,7 +60,24 @@ def save_state(st):
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(st, f, ensure_ascii=False, indent=2)
 
+
+
 TR_CACHE = {}
+MS_TOKEN = {"t": "", "exp": 0}
+
+def get_ms_token():
+    if time.time() < MS_TOKEN["exp"] and MS_TOKEN["t"]:
+        return MS_TOKEN["t"]
+    try:
+        u = "".join(["https://", "edge.", "microsoft.com", "/translate/auth"])
+        t = requests.get(u, headers=HEADERS, timeout=8).text.strip()
+        if len(t) > 20:
+            MS_TOKEN["t"] = t
+            MS_TOKEN["exp"] = time.time() + 480
+            return t
+    except Exception as e:
+        print("MS token err:", e, flush=True)
+    return ""
 
 def tr(text, lang):
     clean = re.sub(r"<[^>]+>", "", text or "").strip()
@@ -72,103 +89,19 @@ def tr(text, lang):
     key = (clean, lang)
     if key in TR_CACHE:
         return TR_CACHE[key]
-
-    # 1. Mozhi va SimplyTranslate ochiq serverlari (Render IP'ni bloklamaydi)
-    mirrors = [
-        ("mozhi.aryak.me", f"/api/translate?engine=google&from=en&to={lang}&text="),
-        ("translate.bus-hit.me", f"/api/translate?engine=google&from=en&to={lang}&text="),
-        ("simplytranslate.org", f"/api/translate/?engine=google&from=en&to={lang}&text="),
-        ("st.tokhmi.xyz", f"/api/translate/?engine=google&from=en&to={lang}&text=")
-    ]
-    q = urllib.parse.quote(clean)
-    for host, path in mirrors:
-        try:
-            u = "".join(["https://", host, path, q])
-            r = requests.get(u, headers=HEADERS, timeout=7).json()
-            res = r.get("translated-text") or r.get("translated_text") or r.get("translation")
-            if res and res.lower() != clean.lower():
+    try:
+        tok = get_ms_token()
+        if tok:
+            u = "".join(["https://", "api-edge.", "cognitive.", "microsofttranslator.com", f"/translate?from=en&to={lang}&api-version=3.0"])
+            h = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+            r = requests.post(u, headers=h, json=[{"Text": clean}], timeout=8).json()
+            res = next(iter(next(iter(r))["translations"]))["text"]
+            if res:
                 TR_CACHE[key] = res
                 return res
-        except Exception:
-            pass
-
-    # 2. Zaxira: deep-translator (Bing / Pons / Google)
-    try:
-        from deep_translator import GoogleTranslator
-        res = GoogleTranslator(source="en", target=lang).translate(clean)
-        if res:
-            TR_CACHE[key] = res
-            return res
-    except Exception:
-        pass
-
-    return clean
-
-
-
-def get_rates():
-    try:
-        u = "".join(["https://", "open.", "er-api.com", "/v6/latest/USD"])
-        r = requests.get(u, timeout=10).json()["rates"]
-        uzs = float(r["UZS"])
-        return uzs, uzs / float(r["RUB"])
-    except Exception:
-        return 12800.0, 135.0
-
-def get_steam_details(appid):
-    try:
-        u = "".join(["https://", "store.", "steampowered.com", f"/api/appdetails?appids={appid}&l=english"])
-        d = requests.get(u, headers=HEADERS, timeout=8).json()
-        info = (d.get(str(appid), {}).get("data") or {})
-        desc = info.get("short_description", "")
-        genres = ", ".join([g.get("description", "") for g in (info.get("genres") or [])[:3]])
-        img = info.get("header_image", "")
-        return desc, genres, img
-    except Exception:
-        return "", "", ""
-
-def get_steam_games(free_only):
-    res = []
-    try:
-        u = "".join(["https://", "store.", "steampowered.com", "/api/featuredcategories/?cc=us&l=english"])
-        r = requests.get(u, headers=HEADERS, timeout=15)
-        items = (r.json().get("specials") or {}).get("items") or []
-        seen = set()
-        for it in items:
-            appid = it.get("id")
-            if not appid or appid in seen:
-                continue
-            seen.add(appid)
-            disc = int(it.get("discount_percent") or 0)
-            final_c = int(it.get("final_price") or 0)
-            orig_c = int(it.get("original_price") or 0)
-            if orig_c <= 0:
-                continue
-            isf = (final_c == 0 or disc == 100)
-            if free_only != isf:
-                continue
-            exp = it.get("discount_expiration")
-            end_s = datetime.fromtimestamp(exp, timezone.utc).strftime("%d.%m.%Y") if exp else ""
-            desc, genres, h_img = get_steam_details(appid)
-            img = h_img or it.get("large_capsule_image") or it.get("header_image") or ""
-            res.append({
-                "id": f"st_{appid}",
-                "title": it.get("name", "Steam Game"),
-                "desc": desc,
-                "genres": genres,
-                "img": img,
-                "orig": orig_c / 100.0,
-                "sale": final_c / 100.0,
-                "disc": disc if disc > 0 else 100,
-                "free": isf,
-                "end": end_s,
-                "link": "".join(["https://", "store.", "steampowered.com", f"/app/{appid}/"])
-            })
-            if len(res) >= 5:
-                break
     except Exception as e:
-        print("Steam err:", e, flush=True)
-    return res
+        print("MS tr err:", e, flush=True)
+    return clean
 
 
 def get_epic_games(free_only):
