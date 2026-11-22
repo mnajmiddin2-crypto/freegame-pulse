@@ -72,15 +72,28 @@ def tr(text, lang):
     key = (clean, lang)
     if key in TR_CACHE:
         return TR_CACHE[key]
+    for base in ("lingva.ml", "lingva.lunar.icu", "lingva.garudalinux.org"):
+        try:
+            q = urllib.parse.quote(clean)
+            u = "".join(["https://", base, f"/api/v1/en/{lang}/{q}"])
+            r = requests.get(u, timeout=6).json()
+            res = r.get("translation")
+            if res:
+                TR_CACHE[key] = res
+                return res
+        except Exception:
+            pass
     try:
+        time.sleep(0.7)
         from deep_translator import GoogleTranslator
         res = GoogleTranslator(source="en", target=lang).translate(clean)
-        if res and "MYMEMORY WARNING" not in res:
+        if res:
             TR_CACHE[key] = res
             return res
     except Exception as e:
         print("Tr err:", e, flush=True)
     return clean
+
 
 
 
