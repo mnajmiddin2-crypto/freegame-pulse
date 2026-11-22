@@ -60,6 +60,8 @@ def save_state(st):
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(st, f, ensure_ascii=False, indent=2)
 
+TR_CACHE = {}
+
 def tr(text, lang):
     clean = re.sub(r"<[^>]+>", "", text or "").strip()
     if not clean:
@@ -67,22 +69,19 @@ def tr(text, lang):
     clean = clean[:180]
     if lang == "en":
         return clean
+    key = (clean, lang)
+    if key in TR_CACHE:
+        return TR_CACHE[key]
     try:
-        q = urllib.parse.quote(clean)
-        u = "".join(["https://", "translate.", "googleapis.com", f"/translate_a/single?client=gtx&sl=en&tl={lang}&dt=t&q={q}"])
-        r = requests.get(u, headers=HEADERS, timeout=8).json()
-        res = "".join([part[0] for part in r[0] if part and part[0]])
-        if res and res.lower() != clean.lower():
+        from deep_translator import GoogleTranslator
+        res = GoogleTranslator(source="en", target=lang).translate(clean)
+        if res and "MYMEMORY WARNING" not in res:
+            TR_CACHE[key] = res
             return res
-    except Exception:
-        pass
-    try:
-        q = urllib.parse.quote(clean)
-        u2 = "".join(["https://", "api.", "mymemory.translated.net", f"/get?q={q}&langpair=en|{lang}"])
-        r2 = requests.get(u2, timeout=8).json()
-        return r2.get("responseData", {}).get("translatedText") or clean
-    except Exception:
-        return clean
+    except Exception as e:
+        print("Tr err:", e, flush=True)
+    return clean
+
 
 
 def get_rates():
