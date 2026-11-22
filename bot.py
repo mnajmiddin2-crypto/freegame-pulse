@@ -17,7 +17,7 @@ UI = {
         "s_sale": "🔥 Steam chegirmalar", "s_free": "🎁 Steam tekinlar",
         "e_sale": "⚡ Epic Games chegirmalar", "e_free": "🎉 Epic Games tekinlar",
         "rates": "💱 Valyuta kurslari", "lang": "🌐 Tilni o'zgartirish",
-        "load": "⏳ Ma'lumotlar va tavsiflar yuklanmoqda...", "empty": "😔 Hozircha bu bo'limda faol aksiyalar topilmadi.",
+        "load": "⏳ O'yinlar, rasmlar va 3 tilli tavsiflar yuklanmoqda...", "empty": "😔 Hozircha bu bo'limda faol aksiyalar topilmadi.",
         "btn": "🎮 O'yinni olish / Ochish",
         "r_msg": "💱 <b>Valyuta kurslari:</b>\n\n🇺🇸 <b>1 USD</b> = <code>{usd}</code> so'm\n🇷🇺 <b>1 RUB</b> = <code>{rub}</code> so'm"
     },
@@ -26,7 +26,7 @@ UI = {
         "s_sale": "🔥 Скидки Steam", "s_free": "🎁 Бесплатно в Steam",
         "e_sale": "⚡ Скидки Epic Games", "e_free": "🎉 Бесплатно в Epic Games",
         "rates": "💱 Курсы валют", "lang": "🌐 Сменить язык",
-        "load": "⏳ Загрузка игр и описаний...", "empty": "😔 В этом разделе пока нет активных акций.",
+        "load": "⏳ Загрузка игр, картинок и описаний на 3 языках...", "empty": "😔 В этом разделе пока нет активных акций.",
         "btn": "🎮 Забрать / Открыть игру",
         "r_msg": "💱 <b>Курсы валют:</b>\n\n🇺🇸 <b>1 USD</b> = <code>{usd}</code> сум\n🇷🇺 <b>1 RUB</b> = <code>{rub}</code> сум"
     },
@@ -35,7 +35,7 @@ UI = {
         "s_sale": "🔥 Steam Discounts", "s_free": "🎁 Steam Freebies",
         "e_sale": "⚡ Epic Games Discounts", "e_free": "🎉 Epic Games Freebies",
         "rates": "💱 Exchange Rates", "lang": "🌐 Change Language",
-        "load": "⏳ Loading games and descriptions...", "empty": "😔 No active deals in this section right now.",
+        "load": "⏳ Loading games, images & 3-language descriptions...", "empty": "😔 No active deals in this section right now.",
         "btn": "🎮 Claim / Open Game",
         "r_msg": "💱 <b>Exchange Rates:</b>\n\n🇺🇸 <b>1 USD</b> = <code>{usd}</code> UZS\n🇷🇺 <b>1 RUB</b> = <code>{rub}</code> UZS"
     }
@@ -64,14 +64,14 @@ def tr(text, lang):
     clean = re.sub(r"<[^>]+>", "", text or "").strip()
     if not clean:
         return ""
-    clean = clean[:220]
+    clean = clean[:180]
     if lang == "en":
         return clean
     try:
         q = urllib.parse.quote(clean)
-        u = "".join(["https://", "://googleapis.com", f"/translate_a/single?client=gtx&sl=en&tl={lang}&dt=t&q={q}"])
+        u = "".join(["https://", "translate.", "googleapis.com", f"/translate_a/single?client=gtx&sl=en&tl={lang}&dt=t&q={q}"])
         r = requests.get(u, timeout=8).json()
-        return "".join([part for part in r if part])
+        return "".join([part[0] for part in r[0] if part and part[0]])
     except Exception:
         return clean
 
@@ -84,13 +84,17 @@ def get_rates():
     except Exception:
         return 12800.0, 135.0
 
-def get_steam_desc(appid):
+def get_steam_details(appid):
     try:
         u = "".join(["https://", "store.", "steampowered.com", f"/api/appdetails?appids={appid}&l=english"])
         d = requests.get(u, headers=HEADERS, timeout=8).json()
-        return (d.get(str(appid), {}).get("data") or {}).get("short_description", "")
+        info = (d.get(str(appid), {}).get("data") or {})
+        desc = info.get("short_description", "")
+        genres = ", ".join([g.get("description", "") for g in (info.get("genres") or [])[:3]])
+        img = info.get("header_image", "")
+        return desc, genres, img
     except Exception:
-        return ""
+        return "", "", ""
 
 def get_steam_games(free_only):
     res = []
@@ -114,11 +118,14 @@ def get_steam_games(free_only):
                 continue
             exp = it.get("discount_expiration")
             end_s = datetime.fromtimestamp(exp, timezone.utc).strftime("%d.%m.%Y") if exp else ""
+            desc, genres, h_img = get_steam_details(appid)
+            img = h_img or it.get("large_capsule_image") or it.get("header_image") or ""
             res.append({
                 "id": f"st_{appid}",
                 "title": it.get("name", "Steam Game"),
-                "desc": get_steam_desc(appid),
-                "img": "".join(["https://", "://steamstatic.com", f"/store_item_assets/steam/apps/{appid}/header.jpg"]),
+                "desc": desc,
+                "genres": genres,
+                "img": img,
                 "orig": orig_c / 100.0,
                 "sale": final_c / 100.0,
                 "disc": disc if disc > 0 else 100,
@@ -167,6 +174,10 @@ def get_epic_games(free_only):
                 if im.get("type") in ("OfferImageWide", "DieselStoreFrontWide", "Thumbnail"):
                     img = im.get("url", "")
                     break
+            tags = [t.get("name", "") for t in (el.get("tags") or []) if t.get("groupName") == "genre"][:3]
+            if not tags:
+                tags = [c.get("path", "").split("/")[-1].title() for c in (el.get("categories") or []) if c.get("path") and c.get("path") != "games"][:2]
+            genres = ", ".join([t for t in tags if t])
             slug = el.get("productSlug") or el.get("urlSlug") or ""
             for m_item in (el.get("catalogNs") or {}).get("mappings") or []:
                 if m_item.get("pageSlug"):
@@ -178,6 +189,7 @@ def get_epic_games(free_only):
                 "id": f"ep_{el['id']}",
                 "title": el.get("title", "Epic Game"),
                 "desc": el.get("description", ""),
+                "genres": genres,
                 "img": img,
                 "orig": orig_c / 100.0,
                 "sale": final_c / 100.0,
@@ -192,23 +204,20 @@ def get_epic_games(free_only):
         print("Epic err:", e, flush=True)
     return res
 
-def build_caption(g, lang, uzs_r, rub_r, multi_lang=False):
+def build_caption(g, uzs_r, rub_r):
     if g["free"]:
         pt = "🎁 <s>${:.2f}</s> ➡️ <b>0$ / 0 so'm / 0 ₽ (TEKIN)</b>".format(g["orig"])
     else:
         uzs = f"{int(round(g['sale'] * uzs_r, -2)):,}".replace(",", " ")
         rub = f"{int(round((g['sale'] * uzs_r) / rub_r)):,}".replace(",", " ")
         pt = f"🔥 <b>-{g['disc']}%</b> | <s>${g['orig']:.2f}</s> ➡️ <b>${g['sale']:.2f}</b> ({uzs} so'm | {rub} ₽)"
+    genre_txt = f"\n🏷 <b>Janr / Жанр / Genre:</b> {html.escape(g['genres'])}" if g.get("genres") else ""
     end_txt = f"\n⏳ <b>Muddat / До / Ends:</b> {g['end']}" if g.get("end") else ""
-    if multi_lang:
-        d_uz = html.escape(tr(g["desc"], "uz"))
-        d_ru = html.escape(tr(g["desc"], "ru"))
-        d_en = html.escape(tr(g["desc"], "en"))
-        desc_block = f"\n\n🇺🇿 {d_uz}\n🇷🇺 {d_ru}\n🇬🇧 {d_en}" if d_en else ""
-    else:
-        d_txt = html.escape(tr(g["desc"], lang))
-        desc_block = f"\n\n📝 <i>{d_txt}</i>" if d_txt else ""
-    return f"🎮 <b>{html.escape(g['title'])}</b>\n{pt}{end_txt}{desc_block}"[:1020]
+    d_en = html.escape(tr(g["desc"], "en"))
+    d_uz = html.escape(tr(g["desc"], "uz"))
+    d_ru = html.escape(tr(g["desc"], "ru"))
+    desc_block = f"\n\n🇺🇿 {d_uz}\n🇷🇺 {d_ru}\n🇬🇧 {d_en}" if d_en else ""
+    return f"🎮 <b>{html.escape(g['title'])}</b>\n{pt}{genre_txt}{end_txt}{desc_block}"[:1020]
 
 def send(cid, txt, kb=None):
     d = {"chat_id": cid, "text": txt, "parse_mode": "HTML", "disable_web_page_preview": True}
@@ -219,11 +228,10 @@ def send(cid, txt, kb=None):
     except Exception as e:
         print("Send err:", e, flush=True)
 
-def send_game_card(cid, g, lang, multi_lang=False):
+def send_game_card(cid, g, lang):
     uzs_r, rub_r = get_rates()
-    cap = build_caption(g, lang, uzs_r, rub_r, multi_lang)
-    btn_txt = "🎮 O'yinni olish / Забрать / Claim" if multi_lang else UI[lang]["btn"]
-    ikb = json.dumps({"inline_keyboard": [[{"text": btn_txt, "url": g["link"]}]]})
+    cap = build_caption(g, uzs_r, rub_r)
+    ikb = json.dumps({"inline_keyboard": [[{"text": UI[lang]["btn"], "url": g["link"]}]]})
     if g.get("img"):
         try:
             r = requests.post(f"{TG_URL}/sendPhoto", data={"chat_id": cid, "photo": g["img"], "caption": cap, "parse_mode": "HTML", "reply_markup": ikb}, timeout=15).json()
@@ -238,7 +246,7 @@ def send_games_list(cid, games, lang):
         send(cid, UI[lang]["empty"], main_kb(lang))
         return
     for g in games:
-        send_game_card(cid, g, lang, multi_lang=False)
+        send_game_card(cid, g, lang)
         time.sleep(0.3)
 
 def on_msg(cid, txt, st):
@@ -271,9 +279,9 @@ def auto_channel_loop():
             changed = False
             for g in free_games:
                 if g["id"] not in st["sent"]:
-                    send_game_card(CHANNEL_ID, g, "uz", multi_lang=True)
+                    send_game_card(CHANNEL_ID, g, "uz")
                     for uid, ul in st["users"].items():
-                        send_game_card(uid, g, ul, multi_lang=False)
+                        send_game_card(uid, g, ul)
                     st["sent"].append(g["id"])
                     changed = True
             if changed:
@@ -301,7 +309,7 @@ def poll_loop():
                     cid = str(cb["message"]["chat"]["id"])
                     data = cb.get("data", "")
                     if data.startswith("setlang:"):
-                        lang = data.split(":")
+                        lang = data.split(":")[1]
                         st["users"][cid] = lang
                         save_state(st)
                         requests.post(f"{TG_URL}/answerCallbackQuery", data={"callback_query_id": cb["id"]})
