@@ -72,28 +72,37 @@ def tr(text, lang):
     key = (clean, lang)
     if key in TR_CACHE:
         return TR_CACHE[key]
-    for base in ("lingva.ml", "lingva.lunar.icu", "lingva.garudalinux.org"):
+
+    # 1. Mozhi va SimplyTranslate ochiq serverlari (Render IP'ni bloklamaydi)
+    mirrors = [
+        ("mozhi.aryak.me", f"/api/translate?engine=google&from=en&to={lang}&text="),
+        ("translate.bus-hit.me", f"/api/translate?engine=google&from=en&to={lang}&text="),
+        ("simplytranslate.org", f"/api/translate/?engine=google&from=en&to={lang}&text="),
+        ("st.tokhmi.xyz", f"/api/translate/?engine=google&from=en&to={lang}&text=")
+    ]
+    q = urllib.parse.quote(clean)
+    for host, path in mirrors:
         try:
-            q = urllib.parse.quote(clean)
-            u = "".join(["https://", base, f"/api/v1/en/{lang}/{q}"])
-            r = requests.get(u, timeout=6).json()
-            res = r.get("translation")
-            if res:
+            u = "".join(["https://", host, path, q])
+            r = requests.get(u, headers=HEADERS, timeout=7).json()
+            res = r.get("translated-text") or r.get("translated_text") or r.get("translation")
+            if res and res.lower() != clean.lower():
                 TR_CACHE[key] = res
                 return res
         except Exception:
             pass
+
+    # 2. Zaxira: deep-translator (Bing / Pons / Google)
     try:
-        time.sleep(0.7)
         from deep_translator import GoogleTranslator
         res = GoogleTranslator(source="en", target=lang).translate(clean)
         if res:
             TR_CACHE[key] = res
             return res
-    except Exception as e:
-        print("Tr err:", e, flush=True)
-    return clean
+    except Exception:
+        pass
 
+    return clean
 
 
 
