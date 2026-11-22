@@ -65,6 +65,15 @@ def save_state(st):
 TR_CACHE = {}
 MS_TOKEN = {"t": "", "exp": 0}
 
+def get_rates():
+    try:
+        u = "".join(["https://", "open.", "er-api.com", "/v6/latest/USD"])
+        r = requests.get(u, timeout=10).json()["rates"]
+        uzs = float(r["UZS"])
+        return uzs, uzs / float(r["RUB"])
+    except Exception:
+        return 12800.0, 135.0
+
 def get_ms_token():
     if time.time() < MS_TOKEN["exp"] and MS_TOKEN["t"]:
         return MS_TOKEN["t"]
@@ -102,6 +111,62 @@ def tr(text, lang):
     except Exception as e:
         print("MS tr err:", e, flush=True)
     return clean
+
+
+def get_steam_details(appid):
+    try:
+        u = "".join(["https://", "store.", "steampowered.com", f"/api/appdetails?appids={appid}&l=english"])
+        d = requests.get(u, headers=HEADERS, timeout=8).json()
+        info = (d.get(str(appid), {}).get("data") or {})
+        desc = info.get("short_description", "")
+        genres = ", ".join([g.get("description", "") for g in (info.get("genres") or [])[:3]])
+        img = info.get("header_image", "")
+        return desc, genres, img
+    except Exception:
+        return "", "", ""
+
+def get_steam_games(free_only):
+    res = []
+    try:
+        u = "".join(["https://", "store.", "steampowered.com", "/api/featuredcategories/?cc=us&l=english"])
+        r = requests.get(u, headers=HEADERS, timeout=15)
+        items = (r.json().get("specials") or {}).get("items") or []
+        seen = set()
+        for it in items:
+            appid = it.get("id")
+            if not appid or appid in seen:
+                continue
+            seen.add(appid)
+            disc = int(it.get("discount_percent") or 0)
+            final_c = int(it.get("final_price") or 0)
+            orig_c = int(it.get("original_price") or 0)
+            if orig_c <= 0:
+                continue
+            isf = (final_c == 0 or disc == 100)
+            if free_only != isf:
+                continue
+            exp = it.get("discount_expiration")
+            end_s = datetime.fromtimestamp(exp, timezone.utc).strftime("%d.%m.%Y") if exp else ""
+            desc, genres, h_img = get_steam_details(appid)
+            img = h_img or it.get("large_capsule_image") or it.get("header_image") or ""
+            res.append({
+                "id": f"st_{appid}",
+                "title": it.get("name", "Steam Game"),
+                "desc": desc,
+                "genres": genres,
+                "img": img,
+                "orig": orig_c / 100.0,
+                "sale": final_c / 100.0,
+                "disc": disc if disc > 0 else 100,
+                "free": isf,
+                "end": end_s,
+                "link": "".join(["https://", "store.", "steampowered.com", f"/app/{appid}/"])
+            })
+            if len(res) >= 5:
+                break
+    except Exception as e:
+        print("Steam err:", e, flush=True)
+    return res
 
 
 def get_epic_games(free_only):
