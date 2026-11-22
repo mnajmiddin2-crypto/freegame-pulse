@@ -70,10 +70,20 @@ def tr(text, lang):
     try:
         q = urllib.parse.quote(clean)
         u = "".join(["https://", "translate.", "googleapis.com", f"/translate_a/single?client=gtx&sl=en&tl={lang}&dt=t&q={q}"])
-        r = requests.get(u, timeout=8).json()
-        return "".join([part[0] for part in r[0] if part and part[0]])
+        r = requests.get(u, headers=HEADERS, timeout=8).json()
+        res = "".join([part[0] for part in r[0] if part and part[0]])
+        if res and res.lower() != clean.lower():
+            return res
+    except Exception:
+        pass
+    try:
+        q = urllib.parse.quote(clean)
+        u2 = "".join(["https://", "api.", "mymemory.translated.net", f"/get?q={q}&langpair=en|{lang}"])
+        r2 = requests.get(u2, timeout=8).json()
+        return r2.get("responseData", {}).get("translatedText") or clean
     except Exception:
         return clean
+
 
 def get_rates():
     try:
