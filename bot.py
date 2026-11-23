@@ -102,7 +102,7 @@ def tr(text, lang):
         q = urllib.parse.quote(clean)
         u = "".join(["https://", "api.", "mymemory.translated.net", f"/get?q={q}&langpair=en|{lang}&de=freegamepulse.uz@gmail.com"])
         r = requests.get(u, timeout=8).json()
-        res = r.get("responseData", {}).get("translatedText") or ""
+        res = html.unescape(r.get("responseData", {}).get("translatedText") or "")
         if res and "MYMEMORY" not in res and res.lower() != clean.lower():
             TR_CACHE[key] = res
             return res
