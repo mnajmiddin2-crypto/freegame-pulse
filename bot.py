@@ -99,18 +99,17 @@ def tr(text, lang):
     if key in TR_CACHE:
         return TR_CACHE[key]
     try:
-        tok = get_ms_token()
-        if tok:
-            u = "".join(["https://", "api-edge.", "cognitive.", "microsofttranslator.com", f"/translate?from=en&to={lang}&api-version=3.0"])
-            h = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
-            r = requests.post(u, headers=h, json=[{"Text": clean}], timeout=8).json()
-            res = next(iter(next(iter(r))["translations"]))["text"]
-            if res:
-                TR_CACHE[key] = res
-                return res
+        q = urllib.parse.quote(clean)
+        u = "".join(["https://", "api.", "mymemory.translated.net", f"/get?q={q}&langpair=en|{lang}&de=freegamepulse.uz@gmail.com"])
+        r = requests.get(u, timeout=8).json()
+        res = r.get("responseData", {}).get("translatedText") or ""
+        if res and "MYMEMORY" not in res and res.lower() != clean.lower():
+            TR_CACHE[key] = res
+            return res
     except Exception as e:
-        print("MS tr err:", e, flush=True)
+        print("MM tr err:", e, flush=True)
     return clean
+
 
 
 def get_steam_details(appid):
